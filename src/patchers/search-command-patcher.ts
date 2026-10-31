@@ -3,6 +3,11 @@ import Patcher from "./patcher"
 import { setIcon } from "obsidian"
 import { CanvasGroupNodeData, CanvasTextNodeData } from "src/@types/AdvancedJsonCanvas"
 
+// Added by an LLM agent (P0-5): escape user input so it is matched literally.
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 export default class SearchCommandPatcher extends Patcher {
   protected async patch() {
     if (!this.plugin.settings.getSetting('nativeFileSearchEnabled')) return
@@ -41,6 +46,8 @@ class CanvasSearchView {
   private containerEl: HTMLDivElement
   private searchInput: HTMLInputElement
   private searchCount: HTMLDivElement
+  // Added by an LLM agent (P0-5): debounce handle for search-on-type.
+  private inputDebounce = 0
 
   private searchMatches: SearchMatch[] = []
   private matchIndex = 0
@@ -64,7 +71,12 @@ class CanvasSearchView {
     this.searchInput.type = "text"
     this.searchInput.placeholder = "Find..."
     this.searchInput.addEventListener("keydown", (e: KeyboardEvent) => this.onKeyDown(e))
-    this.searchInput.addEventListener("input", () => this.onInput())
+    // Added by an LLM agent (P0-5/P1-11): debounce search-on-type so every
+    // keystroke doesn't deserialize every node + regex-scan on the UI thread.
+    this.searchInput.addEventListener("input", () => {
+      window.clearTimeout(this.inputDebounce)
+      this.inputDebounce = window.setTimeout(() => this.onInput(), 120)
+    })
 
     this.searchCount = searchInputContainer.createDiv()
     this.searchCount.className = "document-search-count"
@@ -114,21 +126,42 @@ class CanvasSearchView {
 
     if (!hasQuery) this.searchMatches = []
     else {
+      // Added by an LLM agent (P0-5): escape user input before building the
+      // RegExp (a literal `(` used to throw uncaught) and bail out safely on
+      // catastrophic patterns instead of ReDoS-ing the UI thread.
+      let regex: RegExp
+      try {
+        regex = new RegExp(escapeRegExp(this.searchInput.value), "gi")
+      } catch {
+        this.searchMatches = []
+        this.changeMatch(0)
+        return
+      }
+      const query = this.searchInput.value.toLowerCase()
       this.searchMatches = Array.from(this.view.canvas.nodes.values()).map(node => {
         const nodeData = node.getData()
 
         let content: string | undefined = undefined
         if (nodeData.type === "text") content = (nodeData as CanvasTextNodeData).text
         else if (nodeData.type === "group") content = (nodeData as CanvasGroupNodeData).label
-        else if (nodeData.type === "file") content = node.child.data
+        else if (nodeData.type === "file") {
+          try { content = node.child?.data } catch { content = undefined }
+        }
 
-        if (!content) return null
+        if (!content || !content.toLowerCase().includes(query)) return null
 
         const matches: number[][] = []
-        const regex = new RegExp(this.searchInput.value, "gi")
-        let match: RegExpExecArray | null
-        while ((match = regex.exec(content)) !== null) {
-          matches.push([match.index, match.index + match[0].length])
+        try {
+          regex.lastIndex = 0
+          let match: RegExpExecArray | null
+          let guard = 0
+          while ((match = regex.exec(content)) !== null) {
+            matches.push([match.index, match.index + match[0].length])
+            if (match[0].length === 0) regex.lastIndex++
+            if (++guard > 1000) break
+          }
+        } catch {
+          return null
         }
 
         return { nodeId: node.id, content: content, matches: matches }
@@ -158,6 +191,7 @@ class CanvasSearchView {
   }
 
   private close() {
+    window.clearTimeout(this.inputDebounce)
     this.containerEl.remove()
     this.view.canvas.searchEl = undefined
   }

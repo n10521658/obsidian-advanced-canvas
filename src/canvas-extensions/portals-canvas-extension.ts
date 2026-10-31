@@ -11,11 +11,18 @@ const MIN_OPEN_PORTAL_SIZE = { width: 200, height: 200 }
 
 export default class PortalsCanvasExtension extends CanvasExtension {
   isEnabled() { return 'portalsFeatureEnabled' as const }
+  // Added by an LLM agent (P1-8/P1-11): debounced vault.modify handling plus a
+  // per-canvas index of portal source paths so a save doesn't O(canvases x nodes)
+  // scan synchronously on every keystroke-save.
+  private modifyDebounce = 0
+  private pendingModifiedPaths = new Set<string>()
+  private portalIndex = new WeakMap<Canvas, Map<string, Set<string>>>()
 
   init() {
     this.plugin.registerEvent(this.plugin.app.vault.on('modify', (file: TFile) => {
-      for (const canvas of this.plugin.getCanvases())
-        this.onFileModified(canvas, file)
+      this.pendingModifiedPaths.add(file.path)
+      window.clearTimeout(this.modifyDebounce)
+      this.modifyDebounce = window.setTimeout(() => this.flushModifiedFiles(), 300)
     }))
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
@@ -90,11 +97,7 @@ export default class PortalsCanvasExtension extends CanvasExtension {
   }
 
   private onFileModified(canvas: Canvas, file: TFile) {
-    const isAffected = Object.values(canvas.nodes).filter((nodeData: CanvasNode) =>
-      nodeData.getData().type === 'file' &&
-      nodeData.currentPortalFile === file.path
-    ).length > 0
-    if (!isAffected) return
+    if (!this.isPortalSource(canvas, file.path)) return
 
     // Update whole canvas data
     canvas.setData(canvas.getData())
@@ -102,6 +105,63 @@ export default class PortalsCanvasExtension extends CanvasExtension {
     // Maintain history
     canvas.history.current--
     canvas.history.data.pop()
+  }
+
+  /** Added by an LLM agent (P1-8/P1-11): flush debounced vault.modify events. */
+  private flushModifiedFiles() {
+    const paths = [...this.pendingModifiedPaths]
+    this.pendingModifiedPaths.clear()
+    if (paths.length === 0) return
+    for (const canvas of this.plugin.getCanvases()) {
+      try {
+        for (const path of paths) {
+          if (this.isPortalSource(canvas, path)) {
+            canvas.setData(canvas.getData())
+            canvas.history.current--
+            canvas.history.data.pop()
+            break
+          }
+        }
+      } catch (e) { console.error('Advanced Canvas: portal refresh failed:', e) }
+    }
+  }
+
+  /** Added by an LLM agent (P1-8): indexed portal-source check, no full scan. */
+  private isPortalSource(canvas: Canvas, path: string): boolean {
+    let index = this.portalIndex.get(canvas)
+    if (!index) {
+      index = this.buildPortalIndex(canvas)
+      this.portalIndex.set(canvas, index)
+    }
+    if (index.has(path)) return true
+    // Index may be stale (nodes added outside our events) - rebuild once.
+    const rebuilt = this.buildPortalIndex(canvas)
+    this.portalIndex.set(canvas, rebuilt)
+    return rebuilt.has(path)
+  }
+
+  /** Added by an LLM agent (P1-8): Map<portalSourcePath, nodeIds>. */
+  private buildPortalIndex(canvas: Canvas): Map<string, Set<string>> {
+    const index = new Map<string, Set<string>>()
+    try {
+      for (const node of canvas.nodes.values()) {
+        let data: CanvasFileNodeData
+        try { data = node.getData() as CanvasFileNodeData }
+        catch { continue }
+        if (data?.type !== 'file') continue
+        const source = node.currentPortalFile ?? data.file
+        if (!source) continue
+        let set = index.get(source)
+        if (!set) { set = new Set(); index.set(source, set) }
+        set.add(node.id)
+      }
+    } catch { /* canvas tearing down */ }
+    return index
+  }
+
+  override dispose() {
+    window.clearTimeout(this.modifyDebounce)
+    this.pendingModifiedPaths.clear()
   }
 
   private onContainingNodesRequested(_canvas: Canvas, _bbox: BBox, nodes: CanvasNode[]) {
@@ -280,7 +340,7 @@ export default class PortalsCanvasExtension extends CanvasExtension {
     let portalFileData: CanvasData
     try {
       portalFileData = JSON.parse(portalFileDataString) as CanvasData
-    } catch (error) {
+    } catch {
       return
     }
     if (!portalFileData?.nodes || portalFileData.nodes.length !== 1) return
@@ -328,15 +388,20 @@ export default class PortalsCanvasExtension extends CanvasExtension {
     data.edges = data.edges.filter(edgeData => {
       if (PortalsCanvasExtension.isPortalElement(edgeData.id)) return false // Came from portal
 
-      const isFromNodeFromPortal = PortalsCanvasExtension.getNestedIds(edgeData.fromNode).length > 1
-      const isToNodeFromPortal = PortalsCanvasExtension.getNestedIds(edgeData.toNode).length > 1
+      // Added by an LLM agent (P1-8): compute nested ids once per endpoint
+      // instead of twice per edge (getNestedIds splits + scans the prefix).
+      const fromNested = PortalsCanvasExtension.getNestedIds(edgeData.fromNode)
+      const toNested = PortalsCanvasExtension.getNestedIds(edgeData.toNode)
+      const isFromNodeFromPortal = fromNested.length > 1
+      const isToNodeFromPortal = toNested.length > 1
 
       if (!isFromNodeFromPortal && !isToNodeFromPortal) return true // Normal edge
       if (isFromNodeFromPortal && isToNodeFromPortal) return false // Both from portal NOT SUPPORTED YET
 
       // Interdimensional edge
-      const targetPortalId = this.getParentPortalId(isFromNodeFromPortal ? edgeData.fromNode : edgeData.toNode)!
-      const targetPortalData = portalsIdMap.get(targetPortalId)
+      const nestedIds = isFromNodeFromPortal ? fromNested : toNested
+      const targetPortalId = nestedIds.length < 2 ? undefined : nestedIds.slice(0, -1).join(PORTAL_ID_DELIMITER)
+      const targetPortalData = targetPortalId ? portalsIdMap.get(targetPortalId) : undefined
       if (!targetPortalData) return false // Portal not found
 
       targetPortalData.interdimensionalEdges ??= [] // Create array if not exists
@@ -351,7 +416,14 @@ export default class PortalsCanvasExtension extends CanvasExtension {
     if (!dataRef?.nodes) return dataRef
 
     // Deep copy data - If another file gets opened in the same view, the data would get overwritten
-    const data = JSON.parse(JSON.stringify(dataRef)) as CanvasData
+    // Added by an LLM agent (P1-8): guarded deep copy (old code threw on corrupt data).
+    let data: CanvasData
+    try {
+      data = (typeof structuredClone === 'function' ? structuredClone(dataRef) : JSON.parse(JSON.stringify(dataRef))) as CanvasData
+    } catch (e) {
+      console.error('Advanced Canvas: portal data copy failed, using reference:', e)
+      data = dataRef
+    }
 
     // Open portals
     const addedData = await Promise.all(data.nodes.map(nodeData => this.tryOpenPortal(canvas, nodeData as CanvasFileNodeData)))
@@ -395,7 +467,14 @@ export default class PortalsCanvasExtension extends CanvasExtension {
     const portalFileDataString = await this.plugin.app.vault.cachedRead(portalFile)
     if (portalFileDataString === '') return addedData
 
-    const portalFileData = JSON.parse(portalFileDataString) as CanvasData
+    // Added by an LLM agent (P1-8): guarded JSON.parse (old code threw on corrupt portal files).
+    let portalFileData: CanvasData
+    try {
+      portalFileData = JSON.parse(portalFileDataString) as CanvasData
+    } catch (e) {
+      console.error(`Advanced Canvas: portal file is not valid JSON: ${portalNodeData.file}`, e)
+      return addedData
+    }
     if (!portalFileData) return addedData
 
     // Set portal to loaded

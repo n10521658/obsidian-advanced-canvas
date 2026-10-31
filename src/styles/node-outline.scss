@@ -1,0 +1,53 @@
+/* Added by an LLM agent
+   Node outline rings (black/white) drawn around every node's container. Pure box-shadow, so
+   edges (including the edgeWidth feature) and the node's own border style are untouched.
+   The `data-node-outline` attribute and `--ac-node-outline-width` are exposed on the canvas
+   wrapper by node-outline-canvas-extension.ts; with both toggles off the attribute is absent
+   and Obsidian's styling stays untouched. */
+
+.canvas-wrapper[data-node-outline] {
+  /* Single ring (black by default) */
+  --ac-node-outline-shadow: 0 0 0 var(--ac-node-outline-width) #000;
+
+  &[data-node-outline='white'] {
+    --ac-node-outline-shadow: 0 0 0 var(--ac-node-outline-width) #fff;
+  }
+
+  /* Both toggles on: inner black ring + outer white ring */
+  &[data-node-outline='both'] {
+    --ac-node-outline-shadow:
+      0 0 0 var(--ac-node-outline-width) #000,
+      0 0 0 calc(var(--ac-node-outline-width) * 2) #fff;
+  }
+
+  /* Obsidian sets box-shadow on .canvas-node-container per interaction state (app.css:
+     stationary, dragging, selected/focused, themed), so the ring is prepended to each of
+     those states instead of setting box-shadow once - the native focus glow and drag shadow
+     keep working on top of the outline. Shaped nodes whose style sets box-shadow: none
+     !important (masked shapes like diamond) and the dashed/dotted/invisible default node
+     border intentionally suppress all shadows, including this outline. */
+  .canvas-node-container {
+    box-shadow: var(--ac-node-outline-shadow), var(--shadow-stationary);
+  }
+
+  .canvas-node.is-dragging .canvas-node-container {
+    box-shadow: var(--ac-node-outline-shadow), var(--shadow-drag);
+  }
+
+  .canvas-node:is(.is-selected, .is-focused) .canvas-node-container {
+    box-shadow: var(--ac-node-outline-shadow), var(--shadow-stationary), var(--shadow-border-accent);
+  }
+
+  .canvas-node:is(.is-selected, .is-focused).is-dragging .canvas-node-container {
+    box-shadow: var(--ac-node-outline-shadow), var(--shadow-drag), var(--shadow-border-accent);
+  }
+
+  .canvas-node.is-themed .canvas-node-container {
+    box-shadow: var(--ac-node-outline-shadow), inset 0 0 0 1px rgba(var(--canvas-color), 0.7), var(--shadow-stationary);
+  }
+
+  .canvas-node:is(.is-selected, .is-focused).is-themed .canvas-node-container,
+  .canvas-node:is(.is-selected, .is-focused).is-themed.is-dragging .canvas-node-container {
+    box-shadow: var(--ac-node-outline-shadow), var(--shadow-border-themed-inset), var(--shadow-border-themed);
+  }
+}

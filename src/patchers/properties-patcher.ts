@@ -38,12 +38,28 @@ export default class PropertiesPatcher extends Patcher {
           if (this.file?.extension === 'canvas') {
             if (this.file !== this.modifyingFile) return
 
-            this.app.vault.process(this.file, (data: string) => {
-              const content = JSON.parse(data)
-              if (content?.metadata) content.metadata.frontmatter = frontmatter
-
-              return JSON.stringify(content, null, 2)
-            }).catch(() => console.error("Failed to update metadata object in canvas file."))
+            // Added by an LLM agent (P0-6): don't fire-and-forget vault.process;
+            // guard corrupt JSON and log the real error instead of swallowing it.
+            void (async () => {
+              try {
+                await this.app.vault.process(this.file, (data: string) => {
+                  let content: { metadata?: { frontmatter?: unknown } }
+                  try { content = JSON.parse(data) }
+                  catch (e) {
+                    console.error('Advanced Canvas: cannot save frontmatter, canvas file is not valid JSON:', this.file.path, e)
+                    return data
+                  }
+                  if (!content?.metadata) {
+                    console.error('Advanced Canvas: cannot save frontmatter, canvas file has no metadata section:', this.file.path)
+                    return data
+                  }
+                  content.metadata.frontmatter = frontmatter
+                  return JSON.stringify(content, null, 2)
+                })
+              } catch (e) {
+                console.error('Advanced Canvas: failed to save frontmatter in canvas file:', this.file?.path, e)
+              }
+            })()
 
             return
           }

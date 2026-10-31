@@ -267,6 +267,7 @@
   // on the content element - this replaces that 7% with the configured value, so 100% is a solid
   // fill. Only the fill changes: the border and the label are left at full strength.
   &[data-group-opacity] {
+	&[data-group-opacity='0'] { --group-opacity: 0; }
     &[data-group-opacity='0.25'] { --group-opacity: 0.25; }
     &[data-group-opacity='0.5'] { --group-opacity: 0.5; }
     &[data-group-opacity='0.75'] { --group-opacity: 0.75; }
@@ -288,6 +289,45 @@
     .canvas-node-container > .canvas-node-content {
       background-color: rgba(var(--canvas-color), var(--group-opacity, 0.07));
     }
+  }
+  //#endregion
+
+  //#region Font Size (added by an LLM agent)
+  // Per-node font size multiplier for card (text/file/link) nodes. Mirrors the group label
+  // size pattern: each preset sets a multiplier custom property, consumed by the content
+  // rules below. The zoomed-out placeholder title (a fixed 32px in app.css, like the
+  // nodePreviewTextSize setting) scales along with the same multiplier.
+  &[data-font-size] {
+    &[data-font-size='0.75'] { --font-size-multiplier: 0.75; }
+    &[data-font-size='1.5'] { --font-size-multiplier: 1.5; }
+    &[data-font-size='2'] { --font-size-multiplier: 2; }
+    &[data-font-size='3'] { --font-size-multiplier: 3; }
+
+    .canvas-node-content {
+      .markdown-preview-view,
+      .markdown-source-view .cm-content {
+        font-size: calc(var(--font-text-size) * var(--font-size-multiplier, 1));
+      }
+    }
+
+    .canvas-node-placeholder {
+      font-size: calc(32px * var(--font-size-multiplier, 1));
+    }
+  }
+  //#endregion
+
+  //#region Card Padding (added by an LLM agent)
+  // Per-node override of the global "Card node padding" setting. The value is a single
+  // "horizontal,vertical" pixel pair (e.g. '16,8'). Setting the same custom properties the
+  // global setting uses wins over the wrapper-level values through inheritance, so the
+  // padding rules in default-style-sizes.scss apply unchanged - including the flex-spacer
+  // overrides for vertically centered reading-view content.
+  &[data-card-padding] {
+    &[data-card-padding='0,0'] { --ac-card-padding-h: 0px; --ac-card-padding-v: 0px; }
+    &[data-card-padding='8,8'] { --ac-card-padding-h: 8px; --ac-card-padding-v: 8px; }
+    &[data-card-padding='16,8'] { --ac-card-padding-h: 16px; --ac-card-padding-v: 8px; }
+    &[data-card-padding='16,16'] { --ac-card-padding-h: 16px; --ac-card-padding-v: 16px; }
+    &[data-card-padding='24,24'] { --ac-card-padding-h: 24px; --ac-card-padding-v: 24px; }
   }
   //#endregion
 

@@ -47,20 +47,20 @@ export default class EdgePathfindingSquare extends EdgePathfindingMethod {
       } else {
         const fromDirection = BBoxHelper.direction(this.fromSide)
         const firstFromDetourPoint = BBoxHelper.isHorizontal(this.fromSide) ? {
-          x: CanvasHelper.alignToGrid(this.fromBBoxSidePos.x + fromDirection * CanvasHelper.GRID_SIZE),
+          x: CanvasHelper.alignToPluginGrid(this.plugin, this.fromBBoxSidePos.x + fromDirection * CanvasHelper.resolveGridSize(this.plugin)),
           y: this.fromBBoxSidePos.y
         } : {
           x: this.fromBBoxSidePos.x,
-          y: CanvasHelper.alignToGrid(this.fromBBoxSidePos.y + fromDirection * CanvasHelper.GRID_SIZE)
+          y: CanvasHelper.alignToPluginGrid(this.plugin, this.fromBBoxSidePos.y + fromDirection * CanvasHelper.resolveGridSize(this.plugin))
         }
 
         const toDirection = BBoxHelper.direction(this.toSide)
         const firstToDetourPoint = BBoxHelper.isHorizontal(this.toSide) ? {
-          x: CanvasHelper.alignToGrid(this.toBBoxSidePos.x + toDirection * CanvasHelper.GRID_SIZE),
+          x: CanvasHelper.alignToPluginGrid(this.plugin, this.toBBoxSidePos.x + toDirection * CanvasHelper.resolveGridSize(this.plugin)),
           y: this.toBBoxSidePos.y
         } : {
           x: this.toBBoxSidePos.x,
-          y: CanvasHelper.alignToGrid(this.toBBoxSidePos.y + toDirection * CanvasHelper.GRID_SIZE)
+          y: CanvasHelper.alignToPluginGrid(this.plugin, this.toBBoxSidePos.y + toDirection * CanvasHelper.resolveGridSize(this.plugin))
         }
 
         const newFromSide = BBoxHelper.isHorizontal(this.fromSide) ? (
@@ -89,7 +89,7 @@ export default class EdgePathfindingSquare extends EdgePathfindingMethod {
             const combinedBBoxes = BBoxHelper.combineBBoxes([this.fromNodeBBox, this.toNodeBBox])
 
             firstFromDetourPoint = {
-              x: CanvasHelper.alignToGrid((direction > 0 ? combinedBBoxes.maxX : combinedBBoxes.minX) + direction * CanvasHelper.GRID_SIZE),
+              x: CanvasHelper.alignToPluginGrid(this.plugin, (direction > 0 ? combinedBBoxes.maxX : combinedBBoxes.minX) + direction * CanvasHelper.resolveGridSize(this.plugin)),
               y: this.fromBBoxSidePos.y
             }
 
@@ -102,7 +102,7 @@ export default class EdgePathfindingSquare extends EdgePathfindingMethod {
 
             firstFromDetourPoint = {
               x: this.fromBBoxSidePos.x,
-              y: CanvasHelper.alignToGrid((direction > 0 ? combinedBBoxes.maxY : combinedBBoxes.minY) + direction * CanvasHelper.GRID_SIZE)
+              y: CanvasHelper.alignToPluginGrid(this.plugin, (direction > 0 ? combinedBBoxes.maxY : combinedBBoxes.minY) + direction * CanvasHelper.resolveGridSize(this.plugin))
             }
 
             secondFromDetourPoint = {
@@ -123,11 +123,11 @@ export default class EdgePathfindingSquare extends EdgePathfindingMethod {
             const direction = BBoxHelper.direction(this.fromSide)
 
             const firstFromDetourPoint = BBoxHelper.isHorizontal(this.fromSide) ? {
-              x: CanvasHelper.alignToGrid(this.fromBBoxSidePos.x + direction * CanvasHelper.GRID_SIZE),
+              x: CanvasHelper.alignToPluginGrid(this.plugin, this.fromBBoxSidePos.x + direction * CanvasHelper.resolveGridSize(this.plugin)),
               y: this.fromBBoxSidePos.y
             } : {
               x: this.fromBBoxSidePos.x,
-              y: CanvasHelper.alignToGrid(this.fromBBoxSidePos.y + direction * CanvasHelper.GRID_SIZE)
+              y: CanvasHelper.alignToPluginGrid(this.plugin, this.fromBBoxSidePos.y + direction * CanvasHelper.resolveGridSize(this.plugin))
             }
 
             const useUPath = BBoxHelper.isHorizontal(this.fromSide) ?
@@ -161,11 +161,11 @@ export default class EdgePathfindingSquare extends EdgePathfindingMethod {
             const direction = BBoxHelper.direction(this.toSide)
 
             const firstToDetourPoint = BBoxHelper.isHorizontal(this.toSide) ? {
-              x: CanvasHelper.alignToGrid(this.toBBoxSidePos.x + direction * CanvasHelper.GRID_SIZE),
+              x: CanvasHelper.alignToPluginGrid(this.plugin, this.toBBoxSidePos.x + direction * CanvasHelper.resolveGridSize(this.plugin)),
               y: this.toBBoxSidePos.y
             } : {
               x: this.toBBoxSidePos.x,
-              y: CanvasHelper.alignToGrid(this.toBBoxSidePos.y + direction * CanvasHelper.GRID_SIZE)
+              y: CanvasHelper.alignToPluginGrid(this.plugin, this.toBBoxSidePos.y + direction * CanvasHelper.resolveGridSize(this.plugin))
             }
 
             const useUPath = BBoxHelper.isHorizontal(this.toSide) ?
@@ -223,7 +223,7 @@ export default class EdgePathfindingSquare extends EdgePathfindingMethod {
 
     if (BBoxHelper.isHorizontal(fromSide)) {
       const xExtremum = direction > 0 ? Math.max(fromPos.x, toPos.x) : Math.min(fromPos.x, toPos.x)
-      const x = CanvasHelper.alignToGrid(xExtremum + direction * CanvasHelper.GRID_SIZE)
+      const x = CanvasHelper.alignToPluginGrid(this.plugin, xExtremum + direction * CanvasHelper.resolveGridSize(this.plugin))
       return {
         pathArray: [
           fromPos,
@@ -238,7 +238,7 @@ export default class EdgePathfindingSquare extends EdgePathfindingMethod {
       }
     } else {
       const yExtremum = direction > 0 ? Math.max(fromPos.y, toPos.y) : Math.min(fromPos.y, toPos.y)
-      const y = CanvasHelper.alignToGrid(yExtremum + direction * CanvasHelper.GRID_SIZE)
+      const y = CanvasHelper.alignToPluginGrid(this.plugin, yExtremum + direction * CanvasHelper.resolveGridSize(this.plugin))
       return {
         pathArray: [
           fromPos,

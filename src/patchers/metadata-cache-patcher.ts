@@ -46,6 +46,10 @@ export default class MetadataCachePatcher extends Patcher {
 class CanvasMetadataHandler {
   static metadataQueue: TaskQueue = new TaskQueue()
   static linkResolveQueue: TaskQueue = new TaskQueue()
+  /* eslint-disable @typescript-eslint/no-explicit-any -- cache stores raw computeMetadataAsync results */
+  // Added by an LLM agent (P1): per-text metadata cache (see computeCanvasMetadataAsync).
+  static nodeMetadataCache = new Map<string, { metadata: any, links: any[], embeds: any[] }>()
+  /* eslint-enable @typescript-eslint/no-explicit-any */
 
   static async computeCanvasFileMetadataAsync(this: ExtendedMetadataCache, file: TFile) {
     // Add file to uniqueFileLookup
@@ -147,35 +151,72 @@ class CanvasMetadataHandler {
     }
 
     // Add text node entries, links and embeds in parallel
+    // Added by an LLM agent (P1): bounded concurrency (8) + per-text cache.
+    // The old code fired Promise.all over ALL text nodes (200 concurrent
+    // markdown parses + readBinary + hash on every mtime change while typing).
     metadata.nodes = {}
     metadata.links = []
     metadata.embeds = []
-    await Promise.all((content.nodes ?? []).map(async (node, index) => {
-      if (node.type !== 'text') return
+    const textNodes = (content.nodes ?? [])
+      .map((node, index) => ({ node, index }))
+      .filter(({ node }) => node.type === 'text')
+    const CONCURRENCY = 8
+    const nodeCache = CanvasMetadataHandler.nodeMetadataCache
+    for (let i = 0; i < textNodes.length; i += CONCURRENCY) {
+      const batch = textNodes.slice(i, i + CONCURRENCY)
+      await Promise.all(batch.map(async ({ node, index }) => {
+        if (node.type !== 'text') return
 
-      const text = (node as CanvasTextNodeData).text
-      const buffer = new TextEncoder().encode(text).buffer
-      const nodeMetadata = await this.computeMetadataAsync(buffer)
-      if (!nodeMetadata) return
+        const text = (node as CanvasTextNodeData).text ?? ''
+        // Small texts hash inline; huge texts skip the cache (hash cost ~ parse cost).
+        let cacheKey: string | null = null
+        if (text.length < 20000) {
+          let hash = 0
+          for (let j = 0; j < text.length; j++) hash = (hash * 31 + text.charCodeAt(j)) | 0
+          cacheKey = `${text.length}:${hash}`
+          const cached = nodeCache.get(cacheKey)
+          if (cached) {
+            metadata.nodes![node.id] = cached.metadata
+            metadata.links!.push(...cached.links.map(link => ({ ...link, position: { nodeId: node.id, start: { line: 0, col: 1, offset: 0 }, end: { line: 0, col: 1, offset: index } } } satisfies ExtendedLinkCache)))
+            metadata.embeds!.push(...cached.embeds.map(embed => ({ ...embed, position: { nodeId: node.id, start: { line: 0, col: 1, offset: 0 }, end: { line: 0, col: 1, offset: index } } } satisfies ExtendedEmbedCache)))
+            return
+          }
+        }
 
-      metadata.nodes![node.id] = nodeMetadata
-      metadata.links!.push(...(nodeMetadata.links ?? []).map(link => ({
-        ...link,
-        position: {
-          nodeId: node.id,
-          start: { line: 0, col: 1, offset: 0 }, // 0 for node
-          end: { line: 0, col: 1, offset: index } // index of node
+        const buffer = new TextEncoder().encode(text).buffer
+        let nodeMetadata: Awaited<ReturnType<ExtendedMetadataCache['computeMetadataAsync']>>
+        try { nodeMetadata = await this.computeMetadataAsync(buffer) }
+        catch (e) { console.error(`Advanced Canvas: per-node metadata parse failed (node ${node.id}):`, e); return }
+        if (!nodeMetadata) return
+
+        metadata.nodes![node.id] = nodeMetadata
+        const links = (nodeMetadata.links ?? []).map(link => ({
+          ...link,
+          position: {
+            nodeId: node.id,
+            start: { line: 0, col: 1, offset: 0 }, // 0 for node
+            end: { line: 0, col: 1, offset: index } // index of node
+          }
+        } satisfies ExtendedLinkCache))
+        const embeds = (nodeMetadata.embeds ?? []).map(embed => ({
+          ...embed,
+          position: {
+            nodeId: node.id,
+            start: { line: 0, col: 1, offset: 0 }, // 0 for node
+            end: { line: 0, col: 1, offset: index } // index of node
+          }
+        } satisfies ExtendedEmbedCache))
+        metadata.links!.push(...links)
+        metadata.embeds!.push(...embeds)
+        if (cacheKey) {
+          nodeCache.set(cacheKey, { metadata: nodeMetadata, links: nodeMetadata.links ?? [], embeds: nodeMetadata.embeds ?? [] })
+          if (nodeCache.size > 500) {
+            const oldest = nodeCache.keys().next().value
+            if (oldest !== undefined) nodeCache.delete(oldest)
+          }
         }
-      } satisfies ExtendedLinkCache)))
-      metadata.embeds!.push(...(nodeMetadata.embeds ?? []).map(embed => ({
-        ...embed,
-        position: {
-          nodeId: node.id,
-          start: { line: 0, col: 1, offset: 0 }, // 0 for node
-          end: { line: 0, col: 1, offset: index } // index of node
-        }
-      }) satisfies ExtendedEmbedCache))
-    }))
+      }))
+    }
 
     // Add file nodes as embeds
     for (const [index, node] of (content.nodes ?? []).entries()) {

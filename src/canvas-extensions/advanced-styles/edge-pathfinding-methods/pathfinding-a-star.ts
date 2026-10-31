@@ -5,7 +5,14 @@ import CanvasHelper from "src/utils/canvas-helper"
 import SvgPathHelper from "src/utils/svg-path-helper"
 import EdgePathfindingMethod, { EdgePath } from "./edge-pathfinding-method"
 
-const MAX_MS_CALCULATION = 100
+// Added by an LLM agent (P1-9): shared per-frame time budget across edges.
+// The old code allowed MAX_MS_CALCULATION (100ms) *per edge*, so 20 A* edges
+// could freeze the main thread for up to 2s. Now all edges share one budget
+// per animation frame.
+const MAX_MS_PER_EDGE = 100
+let sharedBudgetResetFrame = 0
+let sharedBudgetSpentMs = 0
+
 const BASIC_DIRECTIONS = [
   { dx: 1, dy: 0 },
   { dx: -1, dy: 0 },
@@ -22,28 +29,113 @@ const DIAGONAL_COST = Math.sqrt(2)
 
 const ROUND_PATH_RADIUS = 5
 const SMOOTHEN_PATH_TENSION = 0.2
+const MAX_EXPANSIONS = 20000
 
-class Node {
-  x: number
-  y: number
-  gCost: number
-  hCost: number
-  fCost: number
-  parent: Node | null
+class AStarNode {
+  fCost = 0
+  gCost = 0
+  hCost = 0
+  parent: AStarNode | null = null
+  heapIndex = -1
 
-  constructor(x: number, y: number) {
-    this.x = x
-    this.y = y
+  constructor(
+    public x: number,
+    public y: number
+  ) {}
 
-    this.gCost = 0
-    this.hCost = 0
-    this.fCost = 0
-    this.parent = null
+  key(): string {
+    return `${this.x},${this.y}`
+  }
+}
+
+/** Minimal binary min-heap keyed on fCost (P1-9: replaces the linear min-scan). */
+class MinHeap {
+  private items: AStarNode[] = []
+
+  get size(): number {
+    return this.items.length
   }
 
-  // Only check for x and y, not gCost, hCost, fCost, or parent
-  inList(nodes: Node[]): boolean {
-    return nodes.some(n => n.x === this.x && n.y === this.y)
+  push(node: AStarNode) {
+    node.heapIndex = this.items.length
+    this.items.push(node)
+    this.bubbleUp(node.heapIndex)
+  }
+
+  pop(): AStarNode | undefined {
+    if (this.items.length === 0) return undefined
+    const top = this.items[0]
+    const last = this.items.pop()!
+    if (this.items.length > 0) {
+      this.items[0] = last
+      last.heapIndex = 0
+      this.bubbleDown(0)
+    }
+    top.heapIndex = -1
+    return top
+  }
+
+  update(node: AStarNode) {
+    this.bubbleUp(node.heapIndex)
+  }
+
+  private bubbleUp(index: number) {
+    while (index > 0) {
+      const parent = (index - 1) >> 1
+      if (this.items[index].fCost >= this.items[parent].fCost) break
+      this.swap(index, parent)
+      index = parent
+    }
+  }
+
+  private bubbleDown(index: number) {
+    const length = this.items.length
+    for (;;) {
+      const left = index * 2 + 1
+      const right = left + 1
+      let smallest = index
+      if (left < length && this.items[left].fCost < this.items[smallest].fCost) smallest = left
+      if (right < length && this.items[right].fCost < this.items[smallest].fCost) smallest = right
+      if (smallest === index) break
+      this.swap(index, smallest)
+      index = smallest
+    }
+  }
+
+  private swap(a: number, b: number) {
+    const tmp = this.items[a]
+    this.items[a] = this.items[b]
+    this.items[b] = tmp
+    this.items[a].heapIndex = a
+    this.items[b].heapIndex = b
+  }
+}
+
+/** Uniform-grid spatial index over obstacle bboxes (P1-9: replaces obstacles.some() per cell). */
+class ObstacleGrid {
+  private cellSize: number
+  private cells = new Map<string, BBox[]>()
+
+  constructor(obstacles: BBox[], cellSize: number) {
+    this.cellSize = Math.max(cellSize, 1)
+    for (const obstacle of obstacles) {
+      const minCellX = Math.floor(obstacle.minX / this.cellSize)
+      const maxCellX = Math.floor(obstacle.maxX / this.cellSize)
+      const minCellY = Math.floor(obstacle.minY / this.cellSize)
+      const maxCellY = Math.floor(obstacle.maxY / this.cellSize)
+      for (let cx = minCellX; cx <= maxCellX; cx++) {
+        for (let cy = minCellY; cy <= maxCellY; cy++) {
+          const key = `${cx},${cy}`
+          let list = this.cells.get(key)
+          if (!list) { list = []; this.cells.set(key, list) }
+          list.push(obstacle)
+        }
+      }
+    }
+  }
+
+  candidates(x: number, y: number): BBox[] {
+    return this.cells.get(`${Math.floor(x / this.cellSize)},${Math.floor(y / this.cellSize)}`) ?? []
   }
 }
 
@@ -67,7 +159,10 @@ export default class EdgePathfindingAStar extends EdgePathfindingMethod {
     const toPosWithMargin = BBoxHelper.moveInDirection(this.toPos, this.toSide, 10)
 
     const allowDiagonal = this.plugin.settings.getSetting('edgeStylePathfinderAllowDiagonal')
-    const pathArray = this.aStarAlgorithm(fromPosWithMargin, toPosWithMargin, nodeBBoxes, CanvasHelper.GRID_SIZE / 2, allowDiagonal)
+    // Added by an LLM agent (P1): single grid truth - the configured gridSize
+    // setting, not the dead CanvasHelper.GRID_SIZE constant.
+    const gridSize = this.plugin.settings.getSetting('gridSize') ?? CanvasHelper.GRID_SIZE
+    const pathArray = this.aStarAlgorithm(fromPosWithMargin, toPosWithMargin, nodeBBoxes, gridSize / 2, allowDiagonal)
     if (!pathArray) return null // No path found - use default path
 
     // Make connection points to the node removing the margin
@@ -91,8 +186,20 @@ export default class EdgePathfindingAStar extends EdgePathfindingMethod {
     }
   }
 
+  private claimBudget(): number {
+    // Shared per-frame budget: each edge gets at most MAX_MS_PER_EDGE and the
+    // frame as a whole never spends more than MAX_MS_PER_EDGE total on A*.
+    // (rAF timestamp via performance.now frame bucket.)
+    const frame = Math.floor(performance.now() / 16)
+    if (frame !== sharedBudgetResetFrame) {
+      sharedBudgetResetFrame = frame
+      sharedBudgetSpentMs = 0
+    }
+    return Math.max(0, MAX_MS_PER_EDGE - sharedBudgetSpentMs)
+  }
+
   private aStarAlgorithm(fromPos: Position, toPos: Position, obstacles: BBox[], gridResolution: number, allowDiagonal: boolean): Position[] | null {
-    const start: Node = new Node(
+    const start: AStarNode = new AStarNode(
       Math.floor(fromPos.x / gridResolution) * gridResolution,
       Math.floor(fromPos.y / gridResolution) * gridResolution
     )
@@ -100,7 +207,7 @@ export default class EdgePathfindingAStar extends EdgePathfindingMethod {
     if (this.fromSide === 'right' && fromPos.x !== start.x) start.x += gridResolution
     if (this.fromSide === 'bottom' && fromPos.y !== start.y) start.y += gridResolution
 
-    const end: Node = new Node(
+    const end: AStarNode = new AStarNode(
       Math.floor(toPos.x / gridResolution) * gridResolution,
       Math.floor(toPos.y / gridResolution) * gridResolution
     )
@@ -108,67 +215,73 @@ export default class EdgePathfindingAStar extends EdgePathfindingMethod {
     if (this.toSide === 'right' && toPos.x !== end.x) end.x += gridResolution
     if (this.toSide === 'bottom' && toPos.y !== end.y) end.y += gridResolution
 
+    const obstacleGrid = new ObstacleGrid(obstacles, gridResolution * 8)
+
     // Check if start and end positions are valid
-    if (this.isInsideObstacle(start, obstacles) || this.isInsideObstacle(end, obstacles)) return null
+    if (this.isInsideObstacle(start, obstacleGrid) || this.isInsideObstacle(end, obstacleGrid)) return null
 
-    const openSet: Node[] = [start]
-    const closedSet: Node[] = []
+    const openHeap = new MinHeap()
+    const openByKey = new Map<string, AStarNode>()
+    const closedSet = new Set<string>()
 
+    start.hCost = this.heuristic(start, end, allowDiagonal)
+    start.fCost = start.hCost
+    openHeap.push(start)
+    openByKey.set(start.key(), start)
+
+    const budgetMs = this.claimBudget()
+    if (budgetMs <= 0) return null
     const startTimestamp = performance.now()
+    let expansions = 0
 
-    while (openSet.length > 0) {
-      // Find the node with the lowest fCost in the open set
-      let current: Node|null = null
-      let lowestFCost = Infinity
+    const availableDirections = allowDiagonal ? [...BASIC_DIRECTIONS, ...DIAGONAL_DIRECTIONS] : BASIC_DIRECTIONS
 
-      for (const node of openSet) {
-        if (node.fCost < lowestFCost) {
-          current = node
-          lowestFCost = node.fCost
-        }
-      }
-
-      // Check if the calculation is taking too long
-      if (performance.now() - startTimestamp > MAX_MS_CALCULATION)
-        return null
-
-      // No path found
-      if (!current)
-        return null
-
-      // Remove the current node from the open set and add it to the closed set
-      openSet.splice(openSet.indexOf(current), 1)
-      closedSet.push(current)
+    while (openHeap.size > 0) {
+      const current = openHeap.pop()!
+      openByKey.delete(current.key())
+      if (closedSet.has(current.key())) continue
+      closedSet.add(current.key())
 
       // Check if we have reached the end
       if (current.x === end.x && current.y === end.y)
         return [fromPos, ...this.reconstructPath(current), toPos].map(node => ({ x: node.x, y: node.y }))
 
+      if (++expansions > MAX_EXPANSIONS) return null
+      if ((expansions & 63) === 0 && performance.now() - startTimestamp > budgetMs) {
+        sharedBudgetSpentMs += performance.now() - startTimestamp
+        return null
+      }
+
       // Location is not start or end, all touching positions are invalid
-      if (!(current.x === start.x && current.y === start.y) && this.isTouchingObstacle(current, obstacles))
+      if (!(current.x === start.x && current.y === start.y) && this.isTouchingObstacle(current, obstacleGrid))
         continue
 
-      // Expand neighbors
-      for (const neighbor of this.getPossibleNeighbors(current, obstacles, gridResolution, allowDiagonal)) {
-        // Skip if already processed
-        if (neighbor.inList(closedSet))
-          continue
+      // Expand neighbors (no per-neighbor allocation of direction arrays)
+      for (const direction of availableDirections) {
+        const nx = current.x + direction.dx * gridResolution
+        const ny = current.y + direction.dy * gridResolution
+        const key = `${nx},${ny}`
+        if (closedSet.has(key)) continue
+        if (this.isInsideObstacleXY(nx, ny, obstacleGrid)) continue
 
-        // Calculate tentative gCost
-        const tentativeGCost = current.gCost + (allowDiagonal ? this.getMovementCost({
-          dx: neighbor.x - current.x,
-          dy: neighbor.y - current.y,
-        }) : 1)
+        const stepCost = direction.dx !== 0 && direction.dy !== 0 ? DIAGONAL_COST : 1
+        const tentativeGCost = current.gCost + stepCost
 
-        // Check if neighbor is not already in the open set or if the new gCost is lower
-        if (!neighbor.inList(openSet) || tentativeGCost < neighbor.gCost) {
+        const existing = openByKey.get(key)
+        if (existing) {
+          if (tentativeGCost >= existing.gCost) continue
+          existing.parent = current
+          existing.gCost = tentativeGCost
+          existing.fCost = tentativeGCost + existing.hCost
+          openHeap.update(existing)
+        } else {
+          const neighbor = new AStarNode(nx, ny)
           neighbor.parent = current
           neighbor.gCost = tentativeGCost
-          neighbor.hCost = this.heuristic(neighbor, end)
+          neighbor.hCost = this.heuristic(neighbor, end, allowDiagonal)
           neighbor.fCost = neighbor.gCost + neighbor.hCost
-
-          // Add neighbor to the open set
-          openSet.push(neighbor)
+          openHeap.push(neighbor)
+          openByKey.set(key, neighbor)
         }
       }
     }
@@ -177,46 +290,32 @@ export default class EdgePathfindingAStar extends EdgePathfindingMethod {
     return null
   }
 
-  // Manhattan distance
-  private heuristic(node: Node, end: Node): number {
-    return Math.abs(node.x - end.x) + Math.abs(node.y - end.y)
+  // Added by an LLM agent (P1-9): octile distance when diagonal moves are
+  // allowed (admissible for 8-directional grids); Manhattan otherwise. The old
+  // Manhattan-with-diagonal-costs heuristic was inadmissible and over-expanded.
+  private heuristic(node: AStarNode, end: AStarNode, allowDiagonal: boolean): number {
+    const dx = Math.abs(node.x - end.x)
+    const dy = Math.abs(node.y - end.y)
+    if (!allowDiagonal) return dx + dy
+    return Math.max(dx, dy) + (DIAGONAL_COST - 1) * Math.min(dx, dy)
   }
 
   // Define a function to check if a position isn't inside any obstacle
-  private isTouchingObstacle(node: Position, obstacles: BBox[]): boolean {
-    return obstacles.some(obstacle => BBoxHelper.insideBBox(node, obstacle, true))
+  private isTouchingObstacle(node: Position, obstacles: ObstacleGrid): boolean {
+    return obstacles.candidates(node.x, node.y).some(obstacle => BBoxHelper.insideBBox(node, obstacle, true))
   }
 
-  private isInsideObstacle(node: Position, obstacles: BBox[]): boolean {
-    return obstacles.some(obstacle => BBoxHelper.insideBBox(node, obstacle, false))
+  private isInsideObstacle(node: Position, obstacles: ObstacleGrid): boolean {
+    return obstacles.candidates(node.x, node.y).some(obstacle => BBoxHelper.insideBBox(node, obstacle, false))
   }
 
-  // Define a function to calculate movement cost based on direction
-  private getMovementCost(direction: { dx: number; dy: number }): number {
-    return direction.dx !== 0 && direction.dy !== 0 ? DIAGONAL_COST : 1
+  private isInsideObstacleXY(x: number, y: number, obstacles: ObstacleGrid): boolean {
+    const pos = { x, y }
+    return obstacles.candidates(x, y).some(obstacle => BBoxHelper.insideBBox(pos, obstacle, false))
   }
 
-  private getPossibleNeighbors(node: Node, obstacles: BBox[], gridResolution: number, allowDiagonal: boolean): Node[] {
-    const neighbors: Node[] = []
-
-    const availableDirections = allowDiagonal ? [...BASIC_DIRECTIONS, ...DIAGONAL_DIRECTIONS] : BASIC_DIRECTIONS
-    for (const direction of availableDirections) {
-      const neighbor = new Node(
-        node.x + direction.dx * gridResolution,
-        node.y + direction.dy * gridResolution
-      )
-      neighbor.gCost = node.gCost + this.getMovementCost(direction)
-
-      if (this.isInsideObstacle(neighbor, obstacles)) continue
-
-      neighbors.push(neighbor)
-    }
-
-    return neighbors
-  }
-
-  private reconstructPath(node: Node | null): Node[] {
-    const path: Node[] = []
+  private reconstructPath(node: AStarNode | null): AStarNode[] {
+    const path: AStarNode[] = []
 
     while (node) {
       path.push(node)

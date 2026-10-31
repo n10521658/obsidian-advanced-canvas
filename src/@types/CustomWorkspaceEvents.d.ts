@@ -9,7 +9,9 @@ export interface EventRef {
 
 export interface CustomWorkspaceEvents {
   // Plugin events
-  'advanced-canvas:settings-changed': () => void
+  // Added by an LLM agent: optional changed-keys payload so settings-changed
+  // listeners can skip work when their key didn't change (P1-11 fan-out fix).
+  'advanced-canvas:settings-changed': (changedKeys?: string[]) => void
 
   // Built-in canvas events
   'canvas:selection-menu': (menu: Menu, canvas: Canvas) => void
@@ -106,4 +108,8 @@ export interface CustomWorkspaceEvents {
   'advanced-canvas:canvas-saved:before': (canvas: Canvas) => void
   /** Fired after the canvas gets saved */
   'advanced-canvas:canvas-saved:after': (canvas: Canvas) => void
+  /** Added by an LLM agent: Fired when the presentation navigates to a slide (also on start and refocus) */
+  'advanced-canvas:presentation-node-changed': (canvas: Canvas, node: CanvasNode) => void
+  /** Added by an LLM agent: Fired when the presentation ends */
+  'advanced-canvas:presentation-ended': (canvas: Canvas) => void
 }

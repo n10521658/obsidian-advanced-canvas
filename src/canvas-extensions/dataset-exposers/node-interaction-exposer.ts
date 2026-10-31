@@ -2,6 +2,7 @@ import { Canvas, CanvasNode } from "src/@types/Canvas"
 import CanvasExtension from "../canvas-extension"
 import { getExposedNodeData } from "./node-exposer"
 import PortalsCanvasExtension from "../portals-canvas-extension"
+import { writeDataset } from "./dataset-helpers"
 
 export const TARGET_NODE_DATASET_PREFIX = "target"
 
@@ -18,18 +19,10 @@ export default class NodeInteractionExposerExtension extends CanvasExtension {
         const interactionEl = canvas.nodeInteractionLayer.interactionEl
         if (!interactionEl) return
 
-        for (const exposedDataKey of getExposedNodeData(this.plugin.settings)) {
-          const datasetPairs = nodeData[exposedDataKey] instanceof Object
-            ? Object.entries(nodeData[exposedDataKey]!)
-            : [[exposedDataKey, nodeData[exposedDataKey]]]
-
-          for (const [key, value] of datasetPairs as [string, string][]) {
-            const modifiedKey = TARGET_NODE_DATASET_PREFIX + key.toString().charAt(0).toUpperCase() + key.toString().slice(1)
-
-            if (!value) delete interactionEl.dataset[modifiedKey]
-            else interactionEl.dataset[modifiedKey] = value
-          }
-        }
+        // Added by an LLM agent (P2-16): shared helper (fixes the !value falsy bug).
+        const exposed = getExposedNodeData(this.plugin.settings)
+        if (exposed.length !== 0)
+          writeDataset(interactionEl, nodeData as unknown as Record<string, unknown>, exposed, TARGET_NODE_DATASET_PREFIX)
 
         // Custom treatment for portal nodes
         if (PortalsCanvasExtension.isPortalElement(node.id)) interactionEl.dataset.isFromPortal = 'true'

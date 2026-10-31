@@ -14,12 +14,13 @@ export default class OutgoingLinksPatcher extends Patcher {
           // Trick the app into thinking that the file is a markdown file
           if (isCanvas) this.file.extension = 'md'
 
-          const result = next.call(this, ...args)
-
-          // Revert the extension change
-          if (isCanvas) this.file.extension = 'canvas'
-
-          return result
+          try {
+            return next.call(this, ...args)
+          } finally {
+            // Added by an LLM agent (P0-3): try/finally so the shared TFile
+            // object is never left lied-about if next() throws or is async.
+            if (isCanvas && this.file) this.file.extension = 'canvas'
+          }
         }),
         recomputeUnlinked: Patcher.OverrideExisting(next => function (...args: unknown[]): void {
           const isCanvas = this.file?.extension === 'canvas'
@@ -27,12 +28,12 @@ export default class OutgoingLinksPatcher extends Patcher {
           // Trick the app into thinking that the file is a markdown file
           if (isCanvas) this.file.extension = 'md'
 
-          const result = next.call(this, ...args)
-
-          // Revert the extension change
-          if (isCanvas) this.file.extension = 'canvas'
-
-          return result
+          try {
+            return next.call(this, ...args)
+          } finally {
+            // Added by an LLM agent (P0-3): see above.
+            if (isCanvas && this.file) this.file.extension = 'canvas'
+          }
         })
       })
     })

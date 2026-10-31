@@ -2,6 +2,7 @@ import { Canvas, CanvasEdge } from "src/@types/Canvas"
 import SettingsManager from "src/settings"
 import CanvasExtension from "../canvas-extension"
 import { CanvasEdgeData } from "src/@types/AdvancedJsonCanvas"
+import { writeDataset } from "./dataset-helpers"
 
 export function getExposedEdgeData(settings: SettingsManager): (keyof CanvasEdgeData)[] {
   const exposedData: (keyof CanvasEdgeData)[] = []
@@ -21,25 +22,14 @@ export default class EdgeExposerExtension extends CanvasExtension {
         const edgeData = edge?.getData()
         if (!edgeData) return
 
-        for (const exposedDataKey of getExposedEdgeData(this.plugin.settings)) {
-          const datasetPairs = edgeData[exposedDataKey] && typeof edgeData[exposedDataKey] === 'object'
-            ? Object.entries(edgeData[exposedDataKey] as Record<string, string>)
-            : [[exposedDataKey, edgeData[exposedDataKey]]]
-
-          for (const [key, value] of datasetPairs as [string, string][]) {
-            if (!value) {
-              delete edge.path.display.dataset[key]
-
-              if (edge.fromLineEnd?.el) delete edge.fromLineEnd.el.dataset[key]
-              if (edge.toLineEnd?.el) delete edge.toLineEnd.el.dataset[key]
-            } else {
-              edge.path.display.dataset[key] = value
-
-              if (edge.fromLineEnd?.el) edge.fromLineEnd.el.dataset[key] = value
-              if (edge.toLineEnd?.el) edge.toLineEnd.el.dataset[key] = value
-            }
-          }
-        }
+        // Added by an LLM agent (P1-12/P2-16): skip when nothing exposed; batch
+        // the 3 DOM writes through the shared helper (fixes the !value falsy bug).
+        const exposed = getExposedEdgeData(this.plugin.settings)
+        if (exposed.length === 0) return
+        const record = edgeData as unknown as Record<string, unknown>
+        if (edge.path?.display) writeDataset(edge.path.display, record, exposed)
+        if (edge.fromLineEnd?.el) writeDataset(edge.fromLineEnd.el, record, exposed)
+        if (edge.toLineEnd?.el) writeDataset(edge.toLineEnd.el, record, exposed)
       }
     ))
   }

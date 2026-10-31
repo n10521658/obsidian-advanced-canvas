@@ -189,6 +189,77 @@ export const BUILTIN_NODE_STYLE_ATTRIBUTES = [
     ]
   },
   {
+    // Added by an LLM agent
+    key: 'fontSize',
+    label: 'Font Size',
+    nodeTypes: ['text', 'file', 'link'],
+    options: [
+      {
+        icon: 'label-size-small',
+        label: 'Small (0.75x)',
+        value: '0.75'
+      },
+      {
+        icon: 'label-size-default',
+        label: 'Default (1x)',
+        value: null
+      },
+      {
+        icon: 'label-size-large',
+        label: 'Large (1.5x)',
+        value: '1.5'
+      },
+      {
+        icon: 'label-size-huge',
+        label: 'Huge (2x)',
+        value: '2'
+      },
+      {
+        icon: 'label-size-huge',
+        label: 'Giant (3x)',
+        value: '3'
+      }
+    ]
+  },
+  {
+    // Added by an LLM agent
+    key: 'cardPadding',
+    label: 'Card Padding',
+    nodeTypes: ['text', 'file', 'link'],
+    options: [
+      {
+        icon: 'rotate-ccw',
+        label: 'Default (follows "Card node padding" setting)',
+        value: null
+      },
+      {
+        icon: 'ban',
+        label: 'None (0, 0)',
+        value: '0,0'
+      },
+      {
+        icon: 'square',
+        label: 'Small (8, 8)',
+        value: '8,8'
+      },
+      {
+        icon: 'box',
+        label: 'Medium (16, 8)',
+        value: '16,8'
+      },
+      {
+        icon: 'boxes',
+        label: 'Large (16, 16)',
+        value: '16,16'
+      },
+      {
+        icon: 'expand',
+        label: 'Extra Large (24, 24)',
+        value: '24,24'
+      }
+    ]
+  },
+  {
     key: 'border',
     label: 'Border',
     options: [
@@ -375,6 +446,61 @@ export const BUILTIN_EDGE_STYLE_ATTRIBUTES = [
         icon: 'map',
         label: 'A*',
         value: 'a-star'
+      }
+    ]
+  },
+  {
+    // Added by an LLM agent: consumed by the bezier curvature feature (bezier-curvature-canvas-extension.ts)
+    // Only affects edges without a pathfinding method; the value scales the bezier control points
+    key: 'bezierCurvature',
+    label: 'Bezier Curvature',
+    options: [
+      {
+        icon: 'spline',
+        label: 'Default (100%)',
+        value: null
+      },
+      {
+        icon: 'minus',
+        label: 'Subtle (150%)',
+        value: '1.5'
+      },
+      {
+        icon: 'corner-up-right',
+        label: 'Gentle (200%)',
+        value: '2'
+      },
+      {
+        icon: 'rainbow',
+        label: 'Strong (300%)',
+        value: '3'
+      },
+      {
+        icon: 'wind',
+        label: 'Extreme (500%)',
+        value: '5'
+      }
+    ]
+  },
+  {
+    // Added by an LLM agent: consumed by the z-ordering feature (z-ordering-canvas-extension.ts)
+    key: 'zIndex',
+    label: 'Z-Index',
+    options: [
+      {
+        icon: 'send-to-back',
+        label: 'Back (-1)',
+        value: '-1'
+      },
+      {
+        icon: 'minus',
+        label: 'Default (0)',
+        value: null
+      },
+      {
+        icon: 'bring-to-front',
+        label: 'Front (1)',
+        value: '1'
       }
     ]
   }

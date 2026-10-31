@@ -7,10 +7,23 @@ import { BBox, Canvas, CanvasEdge, CanvasElement, CanvasElementsData, CanvasNode
 import JSONC from "tiny-jsonc"
 import Patcher from "./patcher"
 import BBoxHelper from "src/utils/bbox-helper"
+import CanvasHelper from "src/utils/canvas-helper"
 import { CanvasData, CanvasEdgeData, CanvasNodeData } from "src/@types/AdvancedJsonCanvas"
 import MigrationHelper from "src/utils/migration-helper"
 
 export default class CanvasPatcher extends Patcher {
+  // Added by an LLM agent: rendered z-index offset that keeps group nodes below the edge SVGs
+  private static readonly GROUP_Z_INDEX_OFFSET = 1_000_000
+  // Added by an LLM agent (P0-7/P1-10): per-element uninstallers so removeNode /
+  // removeEdge can release the ~12 per-node wrappers instead of leaking them
+  // in the global plugin.register list for the session.
+  private elementUninstallers = new WeakMap<object, Array<() => void>>()
+  // Added by an LLM agent (P0): re-entrancy guard for the updateSelection writer.
+  private inSelectionUpdate = false
+  // Added by an LLM agent (P0-7): coalesced canvas saves - many setData calls
+  // per gesture collapse into one requestSave per frame instead of one per node.
+  private pendingSaves = new WeakSet<object>()
+
   protected async patch() {
     // Check if there are already loaded canvas view leafs
     const loadedCanvasViewLeafs = this.plugin.app.workspace.getLeavesOfType("canvas")
@@ -174,7 +187,16 @@ export default class CanvasPatcher extends Patcher {
       updateSelection: Patcher.OverrideExisting(next => function (update: () => void): void {
         const oldSelection = new Set(this.selection)
         const result = next.call(this, update)
-        that.plugin.app.workspace.trigger('advanced-canvas:selection-changed', this, oldSelection, (update: () => void) => next.call(this, update))
+        // Added by an LLM agent (P0): recursion guard - the writer below
+        // re-enters updateSelection, which used to re-fire selection-changed
+        // unboundedly when two listeners each wrote.
+        if (that.inSelectionUpdate) return result
+        that.inSelectionUpdate = true
+        try {
+          that.plugin.app.workspace.trigger('advanced-canvas:selection-changed', this, oldSelection, (update: () => void) => next.call(this, update))
+        } finally {
+          that.inSelectionUpdate = false
+        }
         return result
       }),
       createTextNode: Patcher.OverrideExisting(next => function (...args: any): CanvasNode {
@@ -213,27 +235,37 @@ export default class CanvasPatcher extends Patcher {
       }),
       removeNode: Patcher.OverrideExisting(next => function (node: CanvasNode): void {
         const result = next.call(this, node)
+        // Added by an LLM agent (P0-7): uninstall the per-node wrappers so the
+        // global register list doesn't grow unbounded for the session.
+        that.uninstallElement(node)
         if (!this.isClearing) that.plugin.app.workspace.trigger('advanced-canvas:node-removed', this, node)
         return result
       }),
       removeEdge: Patcher.OverrideExisting(next => function (edge: CanvasEdge): void {
         const result = next.call(this, edge)
+        // Added by an LLM agent (P0-7): see above.
+        that.uninstallElement(edge)
         if (!this.isClearing) that.plugin.app.workspace.trigger('advanced-canvas:edge-removed', this, edge)
         return result
       }),
       handleCopy: Patcher.OverrideExisting(next => function (...args: any): void {
         this.isCopying = true
-        const result = next.call(this, ...args)
-        this.isCopying = false
-
-        return result
+        try {
+          return next.call(this, ...args)
+        } finally {
+          // Added by an LLM agent (P0-7): try/finally so a throw can't leave
+          // the expando flag stuck and silence all future copy events.
+          this.isCopying = false
+        }
       }),
       handlePaste: Patcher.OverrideExisting(next => function (...args: any): void {
         this.isPasting = true
-        const result = next.call(this, ...args)
-        this.isPasting = false
-
-        return result
+        try {
+          return next.call(this, ...args)
+        } finally {
+          // Added by an LLM agent (P0-7): see above.
+          this.isPasting = false
+        }
       }),
       getSelectionData: Patcher.OverrideExisting(next => function (...args: any): SelectionData {
         const result = next.call(this, ...args)
@@ -254,7 +286,10 @@ export default class CanvasPatcher extends Patcher {
 
         const widthZoom = this.canvasRect.width / (bbox.maxX - bbox.minX)
         const heightZoom = this.canvasRect.height / (bbox.maxY - bbox.minY)
-        const zoom = this.screenshotting ? Math.min(widthZoom, heightZoom) : Math.clamp(Math.min(widthZoom, heightZoom), -4, 1)
+        // Added by an LLM agent (P1): single zoom truth - CanvasHelper clamps
+        // the upper end at MAX_ALLOWED_ZOOM; the lower end stays at -4.
+        // eslint-disable-next-line obsidianmd/no-static-styles-assignment -- numeric clamp, not styles
+        const zoom = this.screenshotting ? Math.min(widthZoom, heightZoom) : Math.clamp(Math.min(widthZoom, heightZoom), -4, CanvasHelper.MAX_ALLOWED_ZOOM)
         this.tZoom = Math.log2(zoom)
         this.zoomCenter = null
 
@@ -272,21 +307,29 @@ export default class CanvasPatcher extends Patcher {
       }),
       undo: Patcher.OverrideExisting(next => function (...args: any): void {
         const result = next.call(this, ...args)
-        this.importData(this.getData(), true) // Force update the canvas data
+        // Added by an LLM agent (P0/P1): silent re-import so undo is 1 broadcast
+        // (advanced-canvas:undo) instead of getData + importData + 2x
+        // data-loaded = 4+ broadcasts per Ctrl+Z.
+        this.importData(this.getData(), true, true)
         that.plugin.app.workspace.trigger('advanced-canvas:undo', this)
         return result
       }),
       redo: Patcher.OverrideExisting(next => function (...args: any): void {
         const result = next.call(this, ...args)
-        this.importData(this.getData(), true) // Force update the canvas data
+        // Added by an LLM agent (P0/P1): see above.
+        this.importData(this.getData(), true, true)
         that.plugin.app.workspace.trigger('advanced-canvas:redo', this)
         return result
       }),
       clear: Patcher.OverrideExisting(next => function (...args: any): void {
         this.isClearing = true
-        const result = next.call(this, ...args)
-        this.isClearing = false
-        return result
+        try {
+          return next.call(this, ...args)
+        } finally {
+          // Added by an LLM agent (P0-7): try/finally so a throw can't leave
+          // the canvas permanently silencing node/edge-removed events.
+          this.isClearing = false
+        }
       }),
       /*setData: Patcher.OverrideExisting(next => function (...args: any): void {
         //
@@ -328,9 +371,10 @@ export default class CanvasPatcher extends Patcher {
     // Patch canvas popup menu
     Patcher.patchPrototype<CanvasPopupMenu>(this.plugin, view.canvas.menu, {
       render: Patcher.OverrideExisting(next => function (...args: any): void {
+        // Added by an LLM agent (P0): single next() call per menu open. The old
+        // code rendered twice (second call only to re-center), doubling menu cost.
         const result = next.call(this, ...args)
         that.plugin.app.workspace.trigger('advanced-canvas:popup-menu-created', this.canvas)
-        next.call(this) // Re-Center the popup menu
         return result
       })
     })
@@ -345,12 +389,18 @@ export default class CanvasPatcher extends Patcher {
     })
 
     // Add editor extension for node text content change listener
+    // Added by an LLM agent (P1-12): gate on canvas presence - without an open
+    // canvas this listener used to run its field lookup on every keystroke in
+    // every markdown editor for nothing.
     this.plugin.registerEditorExtension([EditorView.updateListener.of((update: ViewUpdate) => {
       if (!update.docChanged) return
+      if (that.plugin.getCanvases().length === 0) return
 
-      const editor = update.state.field(editorInfoField) as any
-      const node = editor.node as CanvasNode | undefined
-      if (!node) return
+      let editor: unknown
+      try { editor = update.state.field(editorInfoField) as any }
+      catch { return }
+      const node = (editor as { node?: CanvasNode }).node
+      if (!node?.canvas) return
 
       that.plugin.app.workspace.trigger('advanced-canvas:node-text-content-changed', node.canvas, node, update)
     })])
@@ -386,6 +436,7 @@ export default class CanvasPatcher extends Patcher {
   private patchNode(node: CanvasNode) {
     const that = this // eslint-disable-line @typescript-eslint/no-this-alias -- For patcher
 
+    const uninstallers: Array<() => void> = []
     Patcher.patch<CanvasNode>(this.plugin, node, {
       render: Patcher.OverrideExisting(next => function (...args: any): void {
         const result = next.call(this, ...args)
@@ -397,18 +448,26 @@ export default class CanvasPatcher extends Patcher {
 
         if (node.initialized && !node.isDirty) {
           node.isDirty = true
-          that.plugin.app.workspace.trigger('advanced-canvas:node-changed', this.canvas, node)
-          delete node.isDirty
+          try {
+            that.plugin.app.workspace.trigger('advanced-canvas:node-changed', this.canvas, node)
+          } finally {
+            // Added by an LLM agent (P0-7): try/finally so a throwing listener
+            // can't leave isDirty stuck and silence all future node-changed.
+            delete node.isDirty
+          }
         }
 
-        // Save the data to the file (only if the canvas isn't loading)
-        /* eslint-disable-next-line @typescript-eslint/no-deprecated -- It's my lint and I know the consequences */
-        this.canvas.data = this.canvas.getData()
-        if (this.initialized) this.canvas.view.requestSave()
-
-        // Add to the undo stack
-        /* eslint-disable-next-line @typescript-eslint/no-deprecated -- It's my lint and I know the consequences */
-        if (addHistory) this.canvas.pushHistory(this.canvas.data)
+        // Added by an LLM agent (P0-7): single getData() per setData (the old
+        // code serialized the whole canvas twice when addHistory was true) and
+        // a coalesced requestSave so multi-node gestures save once per frame.
+        if (this.initialized && !this.canvas?.isClearing) {
+          /* eslint-disable-next-line @typescript-eslint/no-deprecated -- It's my lint and I know the consequences */
+          const canvasData = this.canvas.getData()
+          /* eslint-disable-next-line @typescript-eslint/no-deprecated -- It's my lint and I know the consequences */
+          this.canvas.data = canvasData
+          that.requestCoalescedSave(this.canvas)
+          if (addHistory) this.canvas.pushHistory(canvasData)
+        }
 
         return result
       }),
@@ -437,7 +496,11 @@ export default class CanvasPatcher extends Patcher {
         const persistentZIndex = this.getData().zIndex
 
         // If no persistent zIndex is set, use the dynamic zIndex
-        if (persistentZIndex === undefined) return next.call(this)
+        if (persistentZIndex === undefined) {
+          const result = next.call(this)
+          that.applyGroupZIndexOffset(this) // Added by an LLM agent
+          return result
+        }
 
         // Use the persistent zIndex
         this.zIndex = persistentZIndex
@@ -447,6 +510,7 @@ export default class CanvasPatcher extends Patcher {
           this.zIndex = this.canvas.zIndexCounter + 1
 
         this.nodeEl.style.zIndex = this.zIndex.toString()
+        that.applyGroupZIndexOffset(this) // Added by an LLM agent
       }),
       setIsEditing: Patcher.OverrideExisting(next => function (editing: boolean, ...args: any): void {
         const result = next.call(this, editing, ...args)
@@ -488,7 +552,8 @@ export default class CanvasPatcher extends Patcher {
         that.plugin.app.workspace.trigger('advanced-canvas:node-changed', this.canvas, this)
         return result
       }
-    })
+    }, false, uninstallers)
+    that.elementUninstallers.set(node, uninstallers)
 
     this.runAfterInitialized(node, () => {
       this.plugin.app.workspace.trigger('advanced-canvas:node-added', node.canvas, node)
@@ -496,26 +561,45 @@ export default class CanvasPatcher extends Patcher {
     })
   }
 
+  // Added by an LLM agent: group nodes render below edges (the edge SVGs sit at z-index auto),
+  // regular nodes stay above. Only the rendered CSS z-index is offset - the logical zIndex
+  // (used by the z-ordering commands and zIndexCounter) is left untouched.
+  private applyGroupZIndexOffset(node: CanvasNode) {
+    if (!this.plugin.settings.getSetting('zOrderingControlFeatureEnabled')) return
+    if (node.getData().type !== 'group') return
+
+    node.nodeEl.style.zIndex = (node.zIndex - CanvasPatcher.GROUP_Z_INDEX_OFFSET).toString()
+  }
+
   private patchEdge(edge: CanvasEdge) {
     const that = this // eslint-disable-line @typescript-eslint/no-this-alias -- For patcher
 
+    const uninstallers: Array<() => void> = []
     Patcher.patch<CanvasEdge>(this.plugin, edge, {
       setData: Patcher.OverrideExisting(next => function (data: CanvasEdgeData, addHistory?: boolean): void {
         const result = next.call(this, data)
 
         if (this.initialized && !this.isDirty) {
           this.isDirty = true
-          that.plugin.app.workspace.trigger('advanced-canvas:edge-changed', this.canvas, this)
-          delete this.isDirty
+          try {
+            that.plugin.app.workspace.trigger('advanced-canvas:edge-changed', this.canvas, this)
+          } finally {
+            // Added by an LLM agent (P0-7): try/finally so a throwing listener
+            // can't leave isDirty stuck.
+            delete this.isDirty
+          }
         }
 
-        // Save the data to the file (only if the canvas isn't loading)
-        /* eslint-disable-next-line @typescript-eslint/no-deprecated -- It's my lint and I know the consequences */
-        this.canvas.data = this.canvas.getData()
-        if (this.initialized) this.canvas.view.requestSave()
-
-        // Add to the undo stack
-        if (addHistory) this.canvas.pushHistory(this.canvas.getData())
+        // Added by an LLM agent (P0-7): single getData() per setData +
+        // coalesced save (see patchNode).
+        if (this.initialized && !this.canvas?.isClearing) {
+          /* eslint-disable-next-line @typescript-eslint/no-deprecated -- It's my lint and I know the consequences */
+          const canvasData = this.canvas.getData()
+          /* eslint-disable-next-line @typescript-eslint/no-deprecated -- It's my lint and I know the consequences */
+          this.canvas.data = canvasData
+          that.requestCoalescedSave(this.canvas)
+          if (addHistory) this.canvas.pushHistory(canvasData)
+        }
 
         return result
       }),
@@ -563,12 +647,36 @@ export default class CanvasPatcher extends Patcher {
 
         return result
       }),
-    })
+    }, false, uninstallers)
+    that.elementUninstallers.set(edge, uninstallers)
 
     this.runAfterInitialized(edge, () => {
       this.plugin.app.workspace.trigger('advanced-canvas:edge-added', edge.canvas, edge)
       // this.plugin.app.workspace.trigger(CanvasEvent.EdgeChanged, edge.canvas, edge) - already fired in render function
     })
+  }
+
+  /** Added by an LLM agent (P0-7): run + forget the per-element uninstallers. */
+  private uninstallElement(element: object) {
+    const uninstallers = this.elementUninstallers.get(element)
+    if (!uninstallers) return
+    this.elementUninstallers.delete(element)
+    for (const uninstall of uninstallers) {
+      try { uninstall() } catch (e) { console.error('Advanced Canvas: element uninstaller failed:', e) }
+    }
+  }
+
+  /** Added by an LLM agent (P0-7/P1-10): at most one requestSave per canvas per frame. */
+  private requestCoalescedSave(canvas: Canvas) {
+    if (!canvas?.view) return
+    if (this.pendingSaves.has(canvas)) return
+    this.pendingSaves.add(canvas)
+    const save = () => {
+      this.pendingSaves.delete(canvas)
+      try { canvas.view.requestSave() } catch (e) { console.error('Advanced Canvas: coalesced save failed:', e) }
+    }
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(save)
+    else queueMicrotask(save)
   }
 
   private runAfterInitialized(canvasElement: CanvasElement, onReady: () => void) {

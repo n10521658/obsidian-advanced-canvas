@@ -30,7 +30,7 @@ This plugin enhances the Obsidian canvas with a wide array of features:
     *   [Improved Image Export](#image-export): Export to PNG/SVG with transparency and other options.
 *   **Node Customization:**
     *   [Node Templates](#node-templates): Save and reuse node styles as templates.
-    *   [Node Styles](#node-styles): Includes various [Flowchart Shapes](#node-shapes), [Border Styles](#border-styles), [Group Label Size](#group-label-size), [Group Opacity](#group-opacity), and Text Alignment.
+    *   [Node Styles](#node-styles): Includes various [Flowchart Shapes](#node-shapes), [Border Styles](#border-styles), [Group Label Size](#group-label-size), [Group Opacity](#group-opacity), [Font Size](#font-size), [Card Padding](#card-padding), and Text Alignment. <!-- Edited by an LLM agent -->
     *   [Auto Node Resizing](#auto-node-resizing): Nodes adapt to their content size automatically.
     *   [Variable Breakpoints](#variable-breakpoints): Control content rendering based on zoom level.
     *   [Alternative Text Rendering](#alternative-text-rendering): Fix rendering inconsistencies between nodes in edit mode and reading mode.
@@ -299,6 +299,14 @@ Set how strongly a group's fill is tinted with its colour. Obsidian's own defaul
 *   Set the `Default group opacity` setting under `General` to apply an opacity to every group that doesn't have one of its own.
 
 Need a value that isn't in the list? Add your own with a [custom style](#custom-styles) that sets `--group-opacity` on the node (`1` = solid).
+
+### Font Size <!-- Added by an LLM agent -->
+Set the font size of a text, file or link node's content. The value is a multiplier applied on top of the default text size - pick from 0.75x, 1x, 1.5x, 2x or 3x in the node's popup menu (`Font Size` option). The zoomed-out placeholder title scales along with the same multiplier.
+
+Need a size that isn't in the list? Add your own value with a [custom style](#custom-styles) that sets `--font-size-multiplier` on the node.
+
+### Card Padding <!-- Added by an LLM agent -->
+Set a text, file or link node's inner padding, overriding the global `Card node padding` setting (under `General`) for that node alone. The value is a single "horizontal, vertical" pixel pair - pick a preset in the node's popup menu (`Card Padding` option), from none (0, 0) up to extra large (24, 24). Choosing `Default` removes the override so the node follows the global setting again.
 
 *(Note: Text Alignment options (Left, Center, Right) are also available for nodes.)*
 

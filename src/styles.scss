@@ -4,9 +4,12 @@
 @use "styles/node-styles";
 @use "styles/group-label-wrap"; // Added by an LLM agent
 @use "styles/group-label-visibility"; // Added by an LLM agent
+@use "styles/note-label-visibility"; // Added by an LLM agent
 @use "styles/edge-styles";
 @use "styles/edge-label-markdown"; // Added by an LLM agent
 @use "styles/default-style-sizes"; // Added by an LLM agent
+@use "styles/node-outline"; // Added by an LLM agent
+@use "styles/edge-outline"; // Added by an LLM agent
 @use "styles/node-templates";
 @use "styles/export";
 @use "styles/better-default-settings";
@@ -17,6 +20,8 @@
 @use "styles/focus-mode";
 @use "styles/canvas-filter"; // Added by an LLM agent
 @use "styles/rotate-node"; // Added by an LLM agent
+@use "styles/hide-node-contents"; // Added by an LLM agent
+@use "styles/text-wrap-around"; // Added by an LLM agent
 @use "styles/presentation";
 @use "styles/portals";
 @use "styles/embeds";

@@ -17,7 +17,18 @@ export interface MenuOption {
 export type ConnectionDirection = 'connected' | 'outgoing' | 'incoming'
 
 export default class CanvasHelper {
+  /** Added by an LLM agent (P1): legacy fallback. Use resolveGridSize(plugin) -
+   * the single grid truth is the `gridSize` setting. */
   static readonly GRID_SIZE = 20
+
+  /** Added by an LLM agent (P1): single grid truth - the configured setting. */
+  static resolveGridSize(plugin?: { settings?: { getSetting?: (key: string) => unknown } }): number {
+    try {
+      const value = plugin?.settings?.getSetting?.('gridSize')
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+    } catch { /* fall through to default */ }
+    return CanvasHelper.GRID_SIZE
+  }
 
   static canvasCommand(plugin: AdvancedCanvasPlugin, check: (canvas: Canvas) => boolean, run: (canvas: Canvas) => void): (checking: boolean) => boolean {
     return (checking: boolean) => {
@@ -419,6 +430,11 @@ export default class CanvasHelper {
 
   static alignToGrid(value: number, gridSize: number = this.GRID_SIZE): number {
     return Math.round(value / gridSize) * gridSize
+  }
+
+  /** Added by an LLM agent (P1): align with the plugin's configured gridSize. */
+  static alignToPluginGrid(plugin: { settings?: { getSetting?: (key: string) => unknown } } | undefined, value: number): number {
+    return CanvasHelper.alignToGrid(value, CanvasHelper.resolveGridSize(plugin))
   }
 
   static getBestSideForFloatingEdge(sourcePos: Position, target: CanvasNode): Side {

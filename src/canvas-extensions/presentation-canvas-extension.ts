@@ -13,6 +13,11 @@ export default class PresentationCanvasExtension extends CanvasExtension {
   visitedNodeIds: string[] = []
   fullscreenModalObserver: MutationObserver | null = null
   presentationUsesFullscreen = false
+  // Added by an LLM agent (P1): per-canvas sessions + animation generation so
+  // two leaves presenting don't clobber each other and mashing Right arrow
+  // doesn't stack 5 overlapping zoom chains. Legacy singleton fields above are
+  // kept as aliases of the active canvas session for API compatibility.
+  private sessions = new Map<Canvas, { savedViewport: { x: number, y: number, zoom: number }, visitedNodeIds: string[], animationGen: number, keyHandler: ((e: KeyboardEvent) => void) | null, fullscreenHandler: ((e: Event) => void) | null }>()
 
   isEnabled() { return 'presentationFeatureEnabled' as const }
 
@@ -211,6 +216,13 @@ export default class PresentationCanvasExtension extends CanvasExtension {
   }
 
   private async animateNodeTransition(canvas: Canvas, fromNode: CanvasNode | undefined, toNode: CanvasNode) {
+    // Added by an LLM agent (P1): cancellation generation - a newer transition
+    // on the same canvas invalidates in-flight sleeps from a mashed arrow key.
+    const session = this.sessions.get(canvas)
+    const generation = (session ? session.animationGen + 1 : 1)
+    if (session) session.animationGen = generation
+    const isCurrent = () => this.sessions.get(canvas)?.animationGen === generation
+
     const removePadding = this.plugin.settings.getSetting('zoomToSlideWithoutPadding')
     const animationDurationMs = this.plugin.settings.getSetting('slideTransitionAnimationDuration') * 1000
 
@@ -227,21 +239,35 @@ export default class PresentationCanvasExtension extends CanvasExtension {
       canvas.zoomToRealBbox(currentNodeBBoxEnlarged)
 
       await sleep(animationDurationMs / 2)
+      if (!isCurrent()) return
 
       if (fromNode.getData().id !== toNode.getData().id) {
         const nextNodeBBoxEnlarged = BBoxHelper.scaleBBox(toNodeBBoxPadded, animationIntensity)
         canvas.zoomToRealBbox(nextNodeBBoxEnlarged)
 
         await sleep(animationDurationMs / 2)
+        if (!isCurrent()) return
       }
     }
 
+    if (!isCurrent()) return
     canvas.zoomToRealBbox(toNodeBBoxPadded)
+
+    // Added by an LLM agent - notify listeners (e.g. the presentation slide filter) about the slide change
+    this.plugin.app.workspace.trigger('advanced-canvas:presentation-node-changed', canvas, toNode)
   }
 
   private async startPresentation(canvas: Canvas, tryContinue = false) {
+    // Added by an LLM agent (P1): per-canvas session mirrors the legacy
+    // singleton fields so two leaves can present independently.
+    let existing = this.sessions.get(canvas)
+    if (!existing) {
+      existing = { savedViewport: { x: 0, y: 0, zoom: 1 }, visitedNodeIds: [], animationGen: 0, keyHandler: null, fullscreenHandler: null }
+      this.sessions.set(canvas, existing)
+    }
+    const priorVisited = tryContinue ? (existing.visitedNodeIds.length > 0 ? existing.visitedNodeIds : this.visitedNodeIds) : []
     // Only reset visited nodes if we are not trying to continue
-    if (!tryContinue || this.visitedNodeIds.length === 0) {
+    if (!tryContinue || priorVisited.length === 0) {
       const startNode = canvas.metadata['startNode'] && canvas.nodes.get(canvas.metadata['startNode'])
       if (!startNode) {
         new Notice('No start node found. Please mark a node as a start node through the popup menu.')
@@ -249,7 +275,10 @@ export default class PresentationCanvasExtension extends CanvasExtension {
       }
 
       this.visitedNodeIds = [startNode.getData().id]
+    } else {
+      this.visitedNodeIds = [...priorVisited]
     }
+    existing.visitedNodeIds = [...this.visitedNodeIds]
 
     // Save current viewport
     this.savedViewport = {
@@ -257,6 +286,7 @@ export default class PresentationCanvasExtension extends CanvasExtension {
       y: canvas.ty,
       zoom: canvas.tZoom,
     }
+    existing.savedViewport = { ...this.savedViewport }
 
     const shouldEnterFullscreen = this.plugin.settings.getSetting('fullscreenPresentationEnabled')
     this.presentationUsesFullscreen = shouldEnterFullscreen
@@ -281,7 +311,16 @@ export default class PresentationCanvasExtension extends CanvasExtension {
       canvas.screenshotting = true
 
     // Register event handler for keyboard navigation
-    canvas.wrapperEl.onkeydown = (e: KeyboardEvent) => {
+    // Added by an LLM agent (P1): addEventListener instead of `onkeydown =`
+    // (the old assignment clobbered other handlers); tracked per-canvas so two
+    // leaves don't share one slot.
+    let session = this.sessions.get(canvas)
+    if (!session) {
+      session = { savedViewport: { x: 0, y: 0, zoom: 1 }, visitedNodeIds: [], animationGen: 0, keyHandler: null, fullscreenHandler: null }
+      this.sessions.set(canvas, session)
+    }
+    if (session.keyHandler) canvas.wrapperEl.removeEventListener('keydown', session.keyHandler)
+    const keyHandler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
@@ -299,13 +338,21 @@ export default class PresentationCanvasExtension extends CanvasExtension {
         else if (e.key === 'PageUp') this.previousNode(canvas)
       }
     }
+    session.keyHandler = keyHandler
+    canvas.wrapperEl.addEventListener('keydown', keyHandler)
 
     if (this.presentationUsesFullscreen) {
       // Keep modals while in fullscreen mode
+      // Added by an LLM agent (P1): only relocate Obsidian's own overlay
+      // containers (modal/prompt/menu), not EVERY added node - the old observer
+      // kidnapped all body children and broke other plugins' modals.
       this.fullscreenModalObserver = new MutationObserver((mutationRecords) => {
         mutationRecords.forEach((mutationRecord) => {
           mutationRecord.addedNodes.forEach((node) => {
-            activeDocument.body.removeChild(node)
+            if (node.nodeType !== 1) return
+            const el = node as unknown as HTMLElement
+            if (typeof el.matches !== 'function' || !el.matches('.modal-container, .prompt, .menu, .suggestion-container')) return
+            try { activeDocument.body.removeChild(node) } catch { return }
             activeDocument.fullscreenElement?.appendChild(node)
           })
         })
@@ -316,10 +363,13 @@ export default class PresentationCanvasExtension extends CanvasExtension {
       this.fullscreenModalObserver.observe(activeDocument.body, { childList: true })
 
       // Register event handler for exiting presentation mode
-      canvas.wrapperEl.onfullscreenchange = (_e: Event) => {
+      if (session.fullscreenHandler) canvas.wrapperEl.removeEventListener('fullscreenchange', session.fullscreenHandler)
+      const fullscreenHandler = (_e: Event) => {
         if (activeDocument.fullscreenElement) return
         this.endPresentation(canvas)
       }
+      session.fullscreenHandler = fullscreenHandler
+      canvas.wrapperEl.addEventListener('fullscreenchange', fullscreenHandler)
     }
 
     this.isPresentationMode = true
@@ -341,16 +391,28 @@ export default class PresentationCanvasExtension extends CanvasExtension {
   private endPresentation(canvas: Canvas) {
     if (!this.isPresentationMode) return
 
+    // Added by an LLM agent (P1): invalidate in-flight animations + detach the
+    // per-canvas listeners (removeEventListener, not nulling on* properties).
+    const session = this.sessions.get(canvas)
+    if (session) {
+      session.animationGen++
+      if (session.keyHandler) {
+        canvas.wrapperEl.removeEventListener('keydown', session.keyHandler)
+        session.keyHandler = null
+      }
+      if (session.fullscreenHandler) {
+        canvas.wrapperEl.removeEventListener('fullscreenchange', session.fullscreenHandler)
+        session.fullscreenHandler = null
+      }
+    }
     // Unregister event handlers
     if (this.presentationUsesFullscreen) {
       this.fullscreenModalObserver?.disconnect()
       this.fullscreenModalObserver = null
-      canvas.wrapperEl.onfullscreenchange = null
 
       // Exit fullscreen mode
       if (activeDocument.fullscreenElement) void activeDocument.exitFullscreen()
     }
-    canvas.wrapperEl.onkeydown = null
 
     // Unlock canvas
     canvas.setReadonly(false)
@@ -368,6 +430,9 @@ export default class PresentationCanvasExtension extends CanvasExtension {
 
     this.isPresentationMode = false
     this.presentationUsesFullscreen = false
+
+    // Added by an LLM agent - notify listeners (e.g. the presentation slide filter) that the presentation ended
+    this.plugin.app.workspace.trigger('advanced-canvas:presentation-ended', canvas)
   }
 
   // Added by an LLM agent
@@ -414,6 +479,8 @@ export default class PresentationCanvasExtension extends CanvasExtension {
 
     if (toNode) {
       this.visitedNodeIds.push(toNode.getData().id)
+      const session = this.sessions.get(canvas)
+      if (session) session.visitedNodeIds = [...this.visitedNodeIds]
       void this.animateNodeTransition(canvas, fromNode, toNode)
     } else {
       // No more nodes left, animate to same node
@@ -436,7 +503,16 @@ export default class PresentationCanvasExtension extends CanvasExtension {
       toNode = fromNode
       this.visitedNodeIds.push(fromNodeId)
     }
+    const session = this.sessions.get(canvas)
+    if (session) session.visitedNodeIds = [...this.visitedNodeIds]
 
     void this.animateNodeTransition(canvas, fromNode, toNode)
+  }
+
+  override dispose() {
+    for (const [, session] of this.sessions) session.animationGen++
+    this.sessions.clear()
+    try { this.fullscreenModalObserver?.disconnect() } catch { /* ignore */ }
+    this.fullscreenModalObserver = null
   }
 }

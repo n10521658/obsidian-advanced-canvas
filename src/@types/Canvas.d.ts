@@ -120,6 +120,9 @@ export interface CanvasNode extends CanvasElement {
   updateZIndex(): void
   renderZIndex(): void
 
+  /** Added by an LLM agent - native move method used by the align/distribute commands (rounds x/y and marks the node moved) */
+  moveTo(position: Position): void
+
   color: string
 
   setData(data: AnyCanvasNodeData, addHistory?: boolean): void
@@ -208,6 +211,9 @@ export interface CanvasEdge extends CanvasElement {
 
   labelElement: CanvasEdgeLabelElement | null
 
+  /** Added by an LLM agent: whether lineGroupEl is currently attached to the canvas' edge container */
+  readonly isAttached: boolean
+
   lineGroupEl: HTMLElement
   lineEndGroupEl: HTMLElement
   getCenter(): Position
@@ -260,6 +266,9 @@ export interface Canvas {
 
   nodes: Map<string, CanvasNode>
   edges: Map<string, CanvasEdge>
+  // Added by an LLM agent: SVG containers holding the edges' lineGroupEl/lineEndGroupEl elements (children of canvasEl, before all nodeEls)
+  edgeContainerEl: HTMLElement
+  edgeEndContainerEl: HTMLElement
   getEdgesForNode(node: CanvasNode): CanvasEdge[]
 
   edgeFrom: {
@@ -357,7 +366,8 @@ export interface Canvas {
   handleCopy(e: ClipboardEvent): void
 
   handlePaste(): void
-  requestSave(): void
+  /** Added by an LLM agent: the first argument controls whether a history entry is pushed (default true) */
+  requestSave(pushHistory?: boolean): void
 
   onResize(): void
 

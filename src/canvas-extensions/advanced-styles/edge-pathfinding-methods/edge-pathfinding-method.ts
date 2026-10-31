@@ -19,6 +19,22 @@ export default abstract class EdgePathfindingMethod {
   abstract getPath(): EdgePath | null
 }
 
+/** Added by an LLM agent (P1): named-params alternative to the 10-arg
+ * positional constructor (four args are derivable from each other - one swap
+ * used to silently produce a wrong path). New call sites should use this. */
+export interface EdgePathfindingParams {
+  plugin: AdvancedCanvasPlugin
+  canvas: Canvas
+  fromNodeBBox: BBox
+  fromPos: Position
+  fromBBoxSidePos: Position
+  fromSide: Side
+  toNodeBBox: BBox
+  toPos: Position
+  toBBoxSidePos: Position
+  toSide: Side
+}
+
 export interface EdgePath {
   svgPath: string
   center: Position

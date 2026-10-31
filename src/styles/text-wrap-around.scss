@@ -1,0 +1,27 @@
+// Added by an LLM agent
+// Text wrap-around (see text-wrap-around-canvas-extension.ts): the extension inserts one
+// plain margin-box floated spacer per overlap band into the node's
+// `.markdown-preview-section` (block layout - the outer `.markdown-preview-view` is flex,
+// where floats are ignored and heights collapse to 0). Each spacer is inserted before
+// the first child extending past its band's top edge (no margin-top - a float's top
+// margin is part of its exclusion zone and would narrow the lines above), with inline
+// `float` side, `width`, text-side margin (breathing room) and `height` covering
+// everything except the wider side gap, so lines above stay full width while following
+// lines flow around the overlapping node on the wider side, full width below.
+// Deliberately no `shape-outside` (verified live to leave stale full-width lines
+// behind after spacer-height updates).
+.canvas-node.ac-text-wrap-around {
+  .ac-text-wrap-spacer {
+    // Geometry is fully dynamic per band and set inline by the extension - this just
+    // keeps the spacers invisible and inert.
+    pointer-events: none;
+  }
+
+  // Center-aligned card content renders its section as flex, which ignores floats -
+  // fall back to block layout while wrapping (vertical centering is lost).
+  &[data-text-align='center'] {
+    .markdown-preview-view .markdown-preview-section {
+      display: block;
+    }
+  }
+}

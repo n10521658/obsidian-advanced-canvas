@@ -1,0 +1,68 @@
+/* Added by an LLM agent
+   Edge outline rings (black/white) drawn around every edge's line. The rings are underlay
+   paths (class `ac-edge-outline-path`, maintained by edge-outline-canvas-extension.ts) that
+   carry the same `d` and dataset as the display path, so dashes and the per-edge/default
+   edgeWidth multiplier apply here too - the ring width is the display width plus the outline
+   width, keeping it compatible with the edgeWidth feature. The interaction path keeps
+   Obsidian's own fat transparent stroke, so hit-testing is unchanged. */
+
+.canvas-wrapper[data-edge-outline] {
+  /* Single ring (black by default), or the inner ring when 'both' */
+  .canvas-edges path.ac-edge-outline-path {
+    pointer-events: none;
+    fill: none;
+    stroke: #000;
+    stroke-width: calc((2px * var(--edge-width-multiplier, var(--default-edge-width-multiplier, 1)) + 2 * var(--ac-edge-outline-width)) * var(--zoom-multiplier));
+    transition: stroke-width 100ms ease-out; // Mirrors app.css so the ring animates with the line
+  }
+
+  &[data-edge-outline='white'] .canvas-edges path.ac-edge-outline-path {
+    stroke: #fff;
+  }
+
+  /* Both toggles on: inner black ring + outer white ring */
+  &[data-edge-outline='both'] .canvas-edges path.ac-edge-outline-outer {
+    stroke: #fff;
+    stroke-width: calc((2px * var(--edge-width-multiplier, var(--default-edge-width-multiplier, 1)) + 4 * var(--ac-edge-outline-width)) * var(--zoom-multiplier));
+  }
+
+  /* Focused/hovered edges grow from a 2px to a 5.5px base width (app.css) - the rings grow
+     with them */
+  .canvas-edges g:is(.is-focused, :hover) path.ac-edge-outline-path {
+    stroke-width: calc((5.5px * var(--edge-width-multiplier, var(--default-edge-width-multiplier, 1)) + 2 * var(--ac-edge-outline-width)) * var(--zoom-multiplier));
+  }
+
+  &[data-edge-outline='both'] .canvas-edges g:is(.is-focused, :hover) path.ac-edge-outline-outer {
+    stroke-width: calc((5.5px * var(--edge-width-multiplier, var(--default-edge-width-multiplier, 1)) + 4 * var(--ac-edge-outline-width)) * var(--zoom-multiplier));
+  }
+
+  /* The invisible path style hides the ring along with the line */
+  .canvas-edges path.ac-edge-outline-path[data-path='invisible'] {
+    opacity: 0;
+  }
+
+  /* Arrow head rings: underlay clones of the arrow polygon (see
+     edge-outline-canvas-extension.ts). The clones keep the `canvas-path-end` class, so the
+     app.css / arrow style scale transforms apply unchanged - only fill/stroke/stroke-width
+     are swapped here. The polygon (and with it the stroke) is scaled by
+     zoom * arrow-size via CSS transform, so the stroke width is divided by the arrow size
+     multiplier to land on the same visual ring width as the line's. Caveat: on arrow styles
+     with a transparent fill (thin triangle) the inner half of a ring peeks into the arrow's
+     interior. */
+  .canvas-edges .ac-edge-outline-arrow {
+    pointer-events: none;
+    fill: none;
+    stroke: #000;
+    stroke-width: calc(2 * var(--ac-edge-outline-width) / var(--arrow-size-multiplier, 1));
+  }
+
+  &[data-edge-outline='white'] .canvas-edges .ac-edge-outline-arrow {
+    stroke: #fff;
+  }
+
+  /* Both toggles on: inner black ring + outer white ring */
+  &[data-edge-outline='both'] .canvas-edges .ac-edge-outline-arrow-outer {
+    stroke: #fff;
+    stroke-width: calc(4 * var(--ac-edge-outline-width) / var(--arrow-size-multiplier, 1));
+  }
+}

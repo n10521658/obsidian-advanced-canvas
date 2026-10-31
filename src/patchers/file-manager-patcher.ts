@@ -10,16 +10,25 @@ export default class FileManagerPatcher extends Patcher {
       processFrontMatter: Patcher.OverrideExisting(next => async function (file: TFile, fn: (frontmatter: unknown) => void, options?: DataWriteOptions) {
         // Check if the file is a canvas file
         if (file?.extension === 'canvas') {
-          that.plugin.app.vault.process(file, (data: string) => {
-            const content = JSON.parse(data)
-
-            // Modify frontmatter
-            fn(content.metadata.frontmatter)
-
-            // Save changes
-            return JSON.stringify(content, null, 2)
-          }).catch(() => console.error("Failed to update metadata object in canvas file."))
-
+          // Added by an LLM agent (P0-6): await the vault write (callers expect
+          // completion), guard missing/corrupt metadata, and surface real errors.
+          try {
+            await that.plugin.app.vault.process(file, (data: string) => {
+              let content: { metadata?: { frontmatter?: unknown } }
+              try { content = JSON.parse(data) }
+              catch (e) {
+                console.error('Advanced Canvas: cannot update frontmatter, canvas file is not valid JSON:', file.path, e)
+                return data
+              }
+              content.metadata ??= {}
+              content.metadata.frontmatter ??= {}
+              try { fn(content.metadata.frontmatter) }
+              catch (e) { console.error('Advanced Canvas: frontmatter callback failed:', e) }
+              return JSON.stringify(content, null, 2)
+            })
+          } catch (e) {
+            console.error('Advanced Canvas: failed to update frontmatter in canvas file:', file.path, e)
+          }
           return
         }
 

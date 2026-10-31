@@ -1,0 +1,10 @@
+// Added by an LLM agent
+// Hides everything inside the node's borders (content, zoomed-out placeholder and label),
+// leaving an empty node frame. Toggled per node via the "Hide node contents" context menu item.
+.canvas-node.ac-node-contents-hidden {
+  .canvas-node-content,
+  .canvas-node-placeholder,
+  .canvas-node-label {
+    display: none;
+  }
+}

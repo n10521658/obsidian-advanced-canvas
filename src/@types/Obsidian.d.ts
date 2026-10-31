@@ -66,6 +66,12 @@ declare module "obsidian" {
     recurseChildrenAC: (origin: obsidian.TAbstractFile, traverse: (file: obsidian.TAbstractFile) => void) => void
   }
 
+  // Added by an LLM agent: runtime API (MenuItem.prototype.setSubmenu) that is missing from
+  // the public typings. Creates the item's submenu on first call and returns it.
+  export interface MenuItem {
+    setSubmenu(): obsidian.Menu
+  }
+
   export interface EmbedRegistry {
     embedByExtension: { [extension: string]: (context: obsidian.EmbedContext, file: obsidian.TFile, subpath?: string) => obsidian.Component }
   }

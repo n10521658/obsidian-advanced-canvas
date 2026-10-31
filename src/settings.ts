@@ -1,8 +1,9 @@
-import { Notice, PluginSettingTab, Setting as SettingEl, TextComponent } from "obsidian"
+import { PluginSettingTab, Setting as SettingEl, TextComponent } from "obsidian"
 import { BooleanSetting, ButtonSetting, DimensionSetting, DropdownSetting, NumberSetting, Setting, SettingsHeading, StyleAttributesSetting, TextSetting } from "./@types/Settings"
 import { GET_EDGE_CSS_STYLES_MANAGER } from "./canvas-extensions/advanced-styles/edge-styles"
 import { GET_NODE_CSS_STYLES_MANAGER } from "./canvas-extensions/advanced-styles/node-styles"
 import { BUILTIN_EDGE_STYLE_ATTRIBUTES, BUILTIN_NODE_STYLE_ATTRIBUTES, StyleAttribute } from "./canvas-extensions/advanced-styles/style-config"
+import { NODE_BASED_FILTERS } from "./canvas-extensions/canvas-filter-canvas-extension" // Added by an LLM agent
 import { NodeTemplate } from "./canvas-extensions/node-templates-canvas-extension"
 import { VARIABLE_BREAKPOINT_CSS_VAR } from "./canvas-extensions/variable-breakpoint-canvas-extension"
 import AdvancedCanvasPlugin from "./main"
@@ -24,6 +25,7 @@ export interface AdvancedCanvasPluginSettingsValues {
   disableFontSizeRelativeToZoom: boolean
   wrapGroupLabels: boolean // Added by an LLM agent
   hideGroupLabels: boolean // Added by an LLM agent
+  hideNoteLabels: boolean // Added by an LLM agent
   boxedNodeLabels: boolean // Added by an LLM agent
   defaultGroupLabelSize: keyof typeof SETTINGS.general.children.defaultGroupLabelSize.options // Added by an LLM agent
   defaultGroupOpacity: keyof typeof SETTINGS.general.children.defaultGroupOpacity.options // Added by an LLM agent
@@ -32,6 +34,13 @@ export interface AdvancedCanvasPluginSettingsValues {
   cardNodePadding: [number, number] // Added by an LLM agent - [horizontal, vertical] in px
   connectEdgesToArrowBase: boolean // Added by an LLM agent
   defaultNodeBorder: keyof typeof SETTINGS.general.children.defaultNodeBorder.options // Added by an LLM agent
+  nodePreviewTextSize: keyof typeof SETTINGS.general.children.nodePreviewTextSize.options // Added by an LLM agent
+  nodeOutlineBlack: boolean // Added by an LLM agent
+  nodeOutlineWhite: boolean // Added by an LLM agent
+  nodeOutlineWidth: number // Added by an LLM agent - width in px of each outline ring
+  edgeOutlineBlack: boolean // Added by an LLM agent
+  edgeOutlineWhite: boolean // Added by an LLM agent
+  edgeOutlineWidth: number // Added by an LLM agent - width in px of each outline ring
 
   canvasMetadataCompatibilityEnabled: boolean
   enableSingleNodeLinks: boolean
@@ -64,6 +73,10 @@ export interface AdvancedCanvasPluginSettingsValues {
   aspectRatioControlFeatureEnabled: boolean
 
   nodeRotationFeatureEnabled: boolean // Added by an LLM agent
+  hideNodeContentsFeatureEnabled: boolean // Added by an LLM agent
+  textWrapAroundFeatureEnabled: boolean // Added by an LLM agent
+  increaseNodeSpacingFeatureEnabled: boolean // Added by an LLM agent
+  resizeNodesFeatureEnabled: boolean // Added by an LLM agent
 
   commandsFeatureEnabled: boolean
   zoomToClonedNode: boolean
@@ -113,6 +126,7 @@ export interface AdvancedCanvasPluginSettingsValues {
   fullscreenPresentationEnabled: boolean
   slideTransitionAnimationDuration: number
   slideTransitionAnimationIntensity: number
+  presentationSlideFilter: string // Added by an LLM agent - default slide filter id (see NODE_BASED_FILTERS) or 'none'; overridden per node by the node's slideFilter property
 
   canvasEncapsulationEnabled: boolean
 
@@ -146,6 +160,7 @@ export const DEFAULT_SETTINGS_VALUES: AdvancedCanvasPluginSettingsValues = {
   disableFontSizeRelativeToZoom: false,
   wrapGroupLabels: true, // Added by an LLM agent
   hideGroupLabels: false, // Added by an LLM agent
+  hideNoteLabels: false, // Added by an LLM agent
   boxedNodeLabels: true, // Added by an LLM agent
   defaultGroupLabelSize: '1', // Added by an LLM agent
   defaultGroupOpacity: 'default', // Added by an LLM agent
@@ -154,6 +169,13 @@ export const DEFAULT_SETTINGS_VALUES: AdvancedCanvasPluginSettingsValues = {
   cardNodePadding: [16, 0], // Added by an LLM agent - matches Obsidian's own default padding
   connectEdgesToArrowBase: false, // Added by an LLM agent
   defaultNodeBorder: 'default', // Added by an LLM agent
+  nodePreviewTextSize: '1', // Added by an LLM agent
+  nodeOutlineBlack: false, // Added by an LLM agent
+  nodeOutlineWhite: false, // Added by an LLM agent
+  nodeOutlineWidth: 2, // Added by an LLM agent
+  edgeOutlineBlack: false, // Added by an LLM agent
+  edgeOutlineWhite: false, // Added by an LLM agent
+  edgeOutlineWidth: 2, // Added by an LLM agent
 
   canvasMetadataCompatibilityEnabled: true,
   enableSingleNodeLinks: true,
@@ -186,6 +208,10 @@ export const DEFAULT_SETTINGS_VALUES: AdvancedCanvasPluginSettingsValues = {
   aspectRatioControlFeatureEnabled: false,
 
   nodeRotationFeatureEnabled: false, // Added by an LLM agent
+  hideNodeContentsFeatureEnabled: true, // Added by an LLM agent
+  textWrapAroundFeatureEnabled: true, // Added by an LLM agent
+  increaseNodeSpacingFeatureEnabled: true, // Added by an LLM agent
+  resizeNodesFeatureEnabled: true, // Added by an LLM agent
 
   commandsFeatureEnabled: true,
   zoomToClonedNode: true,
@@ -235,6 +261,7 @@ export const DEFAULT_SETTINGS_VALUES: AdvancedCanvasPluginSettingsValues = {
   fullscreenPresentationEnabled: true,
   slideTransitionAnimationDuration: 0.5,
   slideTransitionAnimationIntensity: 1.25,
+  presentationSlideFilter: 'none', // Added by an LLM agent
 
   canvasEncapsulationEnabled: false,
 
@@ -330,6 +357,11 @@ export const SETTINGS = {
         description: 'When enabled, group labels are hidden. Can be toggled with the "Toggle group label visibility" command.',
         type: 'boolean'
       },
+      hideNoteLabels: { // Added by an LLM agent
+        label: 'Hide note labels',
+        description: 'When enabled, labels of file/text/link nodes are hidden. Can be toggled with the "Toggle note label visibility" command.',
+        type: 'boolean'
+      },
       boxedNodeLabels: { // Added by an LLM agent
         label: 'Boxed node labels',
         description: 'When enabled, file/text/link node labels get the same coloured box styling as group labels, instead of plain text.',
@@ -407,6 +439,50 @@ export const SETTINGS = {
           'invisible': 'Invisible'
         }
       } as DropdownSetting,
+      nodePreviewTextSize: { // Added by an LLM agent
+        label: 'Node preview text size',
+        description: 'The size of the note title shown in place of a node\'s content when zoomed out. 1x is Obsidian\'s default.',
+        type: 'dropdown',
+        options: {
+          '1': 'Default (1x)',
+          '1.5': 'Large (1.5x)',
+          '2': 'Huge (2x)',
+          '3': 'Giant (3x)',
+          '4': 'Max (4x)'
+        }
+      } as DropdownSetting,
+      nodeOutlineBlack: { // Added by an LLM agent
+        label: 'Black node outline',
+        description: 'When enabled, nodes get a black outline around their border. If "White node outline" is also enabled, the black outline becomes the inner ring and the white outline the outer ring.',
+        type: 'boolean'
+      },
+      nodeOutlineWhite: { // Added by an LLM agent
+        label: 'White node outline',
+        description: 'When enabled, nodes get a white outline around their border. If "Black node outline" is also enabled, the white outline becomes the outer ring.',
+        type: 'boolean'
+      },
+      nodeOutlineWidth: { // Added by an LLM agent
+        label: 'Node outline width',
+        description: 'The width of each node outline ring, in pixels.',
+        type: 'number',
+        parse: (value: string) => Math.max(1, parseInt(value) || 1)
+      },
+      edgeOutlineBlack: { // Added by an LLM agent
+        label: 'Black edge outline',
+        description: 'When enabled, edges get a black outline around their line. If "White edge outline" is also enabled, the black outline becomes the inner ring and the white outline the outer ring.',
+        type: 'boolean'
+      },
+      edgeOutlineWhite: { // Added by an LLM agent
+        label: 'White edge outline',
+        description: 'When enabled, edges get a white outline around their line. If "Black edge outline" is also enabled, the white outline becomes the outer ring.',
+        type: 'boolean'
+      },
+      edgeOutlineWidth: { // Added by an LLM agent
+        label: 'Edge outline width',
+        description: 'The width of each edge outline ring, in pixels. Adds onto the edge\'s own width, including the edge width style.',
+        type: 'number',
+        parse: (value: string) => Math.max(1, parseInt(value) || 1)
+      },
     }
   },
   commandsFeatureEnabled: {
@@ -705,16 +781,27 @@ export const SETTINGS = {
         description: 'The intensity of the slide transition animation. The higher the value, the more the canvas will zoom out before zooming in on the next slide.',
         type: 'number',
         parse: (value: string) => Math.max(0, parseFloat(value) || 0)
-      }
+      },
+      // Added by an LLM agent
+      presentationSlideFilter: {
+        label: 'Default slide filter',
+        description: 'When a presentation navigates to a slide that has a "bidirectional" edge (an edge to the slide with an arrow on the incoming node\'s end) from exactly one node, this filter gets applied using that node as the selection. Can be overridden per node via the node context menu ("Slide filter: …"), which stores the choice as the node\'s slideFilter property in the canvas file. Requires the canvas filter feature.',
+        type: 'dropdown',
+        options: {
+          none: 'None',
+          ...Object.fromEntries(NODE_BASED_FILTERS.map(filter => [filter.id, filter.name]))
+        }
+      } as DropdownSetting
     }
   },
   zOrderingControlFeatureEnabled: {
     label: 'Z ordering controls',
-    description: 'Change the persistent z-index of nodes using the context menu.',
+    // Added by an LLM agent: description updated to cover edges and the group node layering
+    description: 'Change the persistent z-index of nodes and edges using the context menu. Default layering: group nodes below edges, edges below other nodes.',
     children: {
       zOrderingControlShowOneLayerShiftOptions: {
         label: 'Show one layer shift options',
-        description: 'When enabled, you can move nodes one layer forward or backward.',
+        description: 'When enabled, you can move nodes and edges one layer forward or backward.',
         type: 'boolean'
       }
     }
@@ -728,6 +815,26 @@ export const SETTINGS = {
   nodeRotationFeatureEnabled: {
     label: 'Node rotation',
     description: 'Rotate nodes around their own center using the context menu (90° steps or a custom angle) or commands. Rotating a group or an open portal rigidly rotates all fully contained nodes with it. Also allows rotating just the content of a node in 90° steps (cardinal content rotation, propagates from groups/portals to the nodes within).',
+    children: { }
+  },
+  hideNodeContentsFeatureEnabled: { // Added by an LLM agent
+    label: 'Hide node contents',
+    description: 'Adds a "Hide node contents" option to the node context menu (right click) that hides everything inside the node\'s borders, leaving an empty node frame. Not available for group nodes.',
+    children: { }
+  },
+  textWrapAroundFeatureEnabled: { // Added by an LLM agent
+    label: 'Text wrap-around',
+    description: 'Adds a "Wrap text around overlapping nodes" option to the node context menu (right click) and the node popup menu. When enabled on a note or card node, its text reflows around nodes stacked on top of it instead of being hidden behind them. Only nodes connected to it by a bidirectional edge pointing into it count as obstacles (keeps large canvases fast). Not available for group and link nodes.',
+    children: { }
+  },
+  increaseNodeSpacingFeatureEnabled: { // Added by an LLM agent
+    label: 'Increase node spacing',
+    description: 'Adds an "Increase spacing" submenu to the selection context menu (right click) that spreads the selected nodes apart by 20, 40, 80, 160 or 320 px - horizontally, vertically or both. Selected groups move together with all nodes inside them, so a group and its children count as a single node.',
+    children: { }
+  },
+  resizeNodesFeatureEnabled: { // Added by an LLM agent
+    label: 'Resize selected nodes',
+    description: 'Adds a "Resize nodes…" item to the selection context menu (right click) that opens a width and height dialog and applies the entered size to every selected node. Group nodes are not resized.',
     children: { }
   },
   variableBreakpointFeatureEnabled: {
@@ -871,8 +978,26 @@ export default class SettingsManager {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS_VALUES, await this.plugin.loadData())
-    this.plugin.app.workspace.trigger("advanced-canvas:settings-changed")
+    const saved = (await this.plugin.loadData() ?? {}) as Record<string, unknown>
+    // Added by an LLM agent (P0): deep-merge one level so a saved partial
+    // object/array doesn't wipe new defaults wholesale, and drop unknown keys
+    // left by renames instead of carrying them forever.
+    const merged: Record<string, unknown> = { ...(DEFAULT_SETTINGS_VALUES as unknown as Record<string, unknown>) }
+    for (const [key, value] of Object.entries(saved)) {
+      if (!(key in DEFAULT_SETTINGS_VALUES)) {
+        console.warn(`Advanced Canvas: ignoring unknown saved setting "${key}" (removed or renamed).`)
+        continue
+      }
+      const def = (DEFAULT_SETTINGS_VALUES as unknown as Record<string, unknown>)[key]
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- intentional copy of untyped saved data
+      if (Array.isArray(def) && Array.isArray(value)) merged[key] = [...value]
+      else if (def !== null && typeof def === 'object' && !Array.isArray(def) &&
+        value !== null && typeof value === 'object' && !Array.isArray(value))
+        merged[key] = { ...def, ...(value as Record<string, unknown>) }
+      else merged[key] = value
+    }
+    this.settings = merged as unknown as AdvancedCanvasPluginSettingsValues
+    this.plugin.app.workspace.trigger("advanced-canvas:settings-changed", Object.keys(merged))
   }
 
   async saveSettings() {
@@ -880,13 +1005,58 @@ export default class SettingsManager {
   }
 
   getSetting<T extends keyof AdvancedCanvasPluginSettingsValues>(key: T): AdvancedCanvasPluginSettingsValues[T] {
-    return this.settings[key]
+    const value = (this.settings as unknown as Record<string, unknown>)[key as string]
+    // Added by an LLM agent (P0): return a copy for mutable refs so callers
+    // can't silently mutate live settings without a settings-changed event.
+    if (Array.isArray(value)) return [...(value as unknown[])] as AdvancedCanvasPluginSettingsValues[T]
+    if (value !== null && typeof value === 'object') return { ...(value as Record<string, unknown>) } as AdvancedCanvasPluginSettingsValues[T]
+    return value as AdvancedCanvasPluginSettingsValues[T]
   }
 
-  async setSetting(data: Partial<AdvancedCanvasPluginSettingsValues>) {
+  // Added by an LLM agent (P0/P1-11): debounced disk writes - text/number fields
+  // used to saveData + fan out settings-changed per keystroke.
+  private saveDebounce = 0
+  private pendingKeys = new Set<keyof AdvancedCanvasPluginSettingsValues>()
+
+  async setSetting(data: Partial<AdvancedCanvasPluginSettingsValues>, options: { debounceMs?: number } = {}) {
+    const keys = Object.keys(data) as (keyof AdvancedCanvasPluginSettingsValues)[]
+    // Added by an LLM agent (P0): warn on misspelled IDs instead of silently dropping them.
+    for (const key of keys) {
+      if (!(key in DEFAULT_SETTINGS_VALUES)) {
+        console.warn(`Advanced Canvas: unknown setting "${key}" ignored. Did you mean one of: ${Object.keys(DEFAULT_SETTINGS_VALUES).slice(0, 8).join(', ')}...?`)
+        delete (data as Record<string, unknown>)[key]
+      }
+    }
+    if (Object.keys(data).length === 0) return
+
+    // Skip the fan-out when nothing actually changed.
+    let changed = false
+    for (const key of Object.keys(data) as (keyof AdvancedCanvasPluginSettingsValues)[]) {
+      if (!Object.is(this.settings[key], (data as Record<string, unknown>)[key])) { changed = true; break }
+    }
+
     this.settings = Object.assign(this.settings, data)
+    for (const key of Object.keys(data) as (keyof AdvancedCanvasPluginSettingsValues)[]) this.pendingKeys.add(key)
+
+    const debounceMs = options.debounceMs ?? 0
+    if (debounceMs > 0) {
+      window.clearTimeout(this.saveDebounce)
+      this.saveDebounce = window.setTimeout(() => void this.flushSettings(), debounceMs)
+      // Still notify immediately for UI responsiveness, but only with changed keys.
+      if (changed) this.plugin.app.workspace.trigger('advanced-canvas:settings-changed', [...this.pendingKeys])
+      return
+    }
+
+    await this.flushSettings(changed)
+  }
+
+  /** Added by an LLM agent (P0/P1-11): write pending settings + fire one event. */
+  async flushSettings(fireEvent = true) {
+    window.clearTimeout(this.saveDebounce)
+    const keys = [...this.pendingKeys]
+    this.pendingKeys.clear()
     await this.saveSettings()
-    this.plugin.app.workspace.trigger("advanced-canvas:settings-changed")
+    if (fireEvent) this.plugin.app.workspace.trigger('advanced-canvas:settings-changed', keys)
   }
 
   addSettingsTab() {
@@ -978,11 +1148,12 @@ export class AdvancedCanvasPluginSettingTab extends PluginSettingTab {
     if (settingsKey !== null) {
       setting.addToggle((toggle) =>
         toggle
-          .setTooltip("Requires a reload to take effect.")
+          // Added by an LLM agent (P2-13): no more "requires reload" - extensions
+          // live-toggle via the settings-changed subscription in CanvasExtension.
+          .setTooltip("Takes effect immediately.")
           .setValue(this.settingsManager.getSetting(settingsKey) as boolean)
           .onChange(async (value) => {
             await this.settingsManager.setSetting({ [settingsKey]: value })
-            new Notice("Reload obsidian to apply the changes.")
           })
       )
     }
@@ -997,7 +1168,8 @@ export class AdvancedCanvasPluginSettingTab extends PluginSettingTab {
       .addText(text => text
         .setValue(this.settingsManager.getSetting(settingId) as string)
         .onChange(async (value) => {
-          await this.settingsManager.setSetting({ [settingId]: setting.parse ? setting.parse(value) : value })
+          // Added by an LLM agent (P1-11): debounce per-keystroke disk writes.
+          await this.settingsManager.setSetting({ [settingId]: setting.parse ? setting.parse(value) : value }, { debounceMs: 400 })
         })
       )
   }
@@ -1009,7 +1181,8 @@ export class AdvancedCanvasPluginSettingTab extends PluginSettingTab {
       .addText(text => text
         .setValue(JSON.stringify(this.settingsManager.getSetting(settingId)))
         .onChange(async (value) => {
-          await this.settingsManager.setSetting({ [settingId]: setting.parse(value) })
+          // Added by an LLM agent (P1-11): see above.
+          await this.settingsManager.setSetting({ [settingId]: setting.parse(value) }, { debounceMs: 400 })
         })
       )
   }

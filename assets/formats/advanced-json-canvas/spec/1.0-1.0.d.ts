@@ -26,6 +26,9 @@ export interface CanvasNodeData {
   zIndex?: number // AdvancedJsonCanvas
   rotation?: number // AdvancedJsonCanvas - Added by an LLM agent - Degrees clockwise, normalized to [0, 360); removed when 0
   contentRotation?: 0 | 90 | 180 | 270 // AdvancedJsonCanvas - Added by an LLM agent - Rotates only the node's inner content; removed when 0
+  hideContents?: boolean // AdvancedJsonCanvas - Added by an LLM agent - Hides everything inside the node's borders; removed when false
+  textWrapAround?: boolean // AdvancedJsonCanvas - Added by an LLM agent - Reflows the node's text around nodes stacked on top of it; removed when false
+  slideFilter?: string // AdvancedJsonCanvas - Added by an LLM agent - Canvas filter id applied when a presentation navigates to a slide connected to this node ('none' disables; falls back to the global presentationSlideFilter setting when undefined)
 
   color?: CanvasColor
 

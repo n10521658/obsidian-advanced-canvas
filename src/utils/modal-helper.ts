@@ -1,4 +1,5 @@
-import App, { FuzzyMatch, FuzzySuggestModal, SuggestModal, TFile } from 'obsidian'
+import App, { FuzzyMatch, FuzzySuggestModal, Modal, Notice, Setting, SuggestModal, TFile } from 'obsidian'
+import { Size } from 'src/@types/Canvas'
 import FilepathHelper from 'src/utils/filepath-helper'
 
 export class AbstractSelectionModal extends FuzzySuggestModal<string> {
@@ -39,6 +40,109 @@ export class AbstractSelectionModal extends FuzzySuggestModal<string> {
       this.onChooseItem = (item: string) => resolve(item)
       this.open()
     })
+  }
+}
+
+/** Added by an LLM agent: width + height input dialog (used by the resize-nodes context menu item). */
+export class DimensionModal extends Modal {
+  private titleText: string
+  private initialWidth: number
+  private initialHeight: number
+  private widthValue: string
+  private heightValue: string
+  private resolveInput: ((value: Size | null) => void) | null = null
+  private resolved = false
+
+  constructor(app: App, title: string, initialWidth: number, initialHeight: number) {
+    super(app)
+
+    this.titleText = title
+    this.initialWidth = initialWidth
+    this.initialHeight = initialHeight
+    this.widthValue = String(initialWidth)
+    this.heightValue = String(initialHeight)
+  }
+
+  onOpen() {
+    this.titleEl.setText(this.titleText)
+
+    new Setting(this.contentEl)
+      .setName('Width')
+      .addText(text => {
+        text.setValue(this.widthValue)
+        text.onChange(value => this.widthValue = value)
+
+        text.inputEl.type = 'number'
+        text.inputEl.min = '1'
+        text.inputEl.addEventListener('keydown', evt => {
+          if (evt.key === 'Enter') {
+            evt.preventDefault()
+            this.submit()
+          }
+        })
+
+        text.inputEl.focus()
+        text.inputEl.select()
+      })
+
+    new Setting(this.contentEl)
+      .setName('Height')
+      .addText(text => {
+        text.setValue(this.heightValue)
+        text.onChange(value => this.heightValue = value)
+
+        text.inputEl.type = 'number'
+        text.inputEl.min = '1'
+        text.inputEl.addEventListener('keydown', evt => {
+          if (evt.key === 'Enter') {
+            evt.preventDefault()
+            this.submit()
+          }
+        })
+      })
+
+    new Setting(this.contentEl)
+      .addButton(button => button
+        .setButtonText('Resize')
+        .setCta()
+        .onClick(() => this.submit())
+      )
+      .addButton(button => button
+        .setButtonText('Cancel')
+        .onClick(() => this.close())
+      )
+  }
+
+  onClose() {
+    this.contentEl.empty()
+
+    if (this.resolved) return
+
+    this.resolved = true
+    this.resolveInput?.(null)
+  }
+
+  awaitInput(): Promise<Size | null> {
+    return new Promise(resolve => {
+      this.resolveInput = resolve
+      this.open()
+    })
+  }
+
+  private submit() {
+    const width = Math.round(Number(this.widthValue))
+    const height = Math.round(Number(this.heightValue))
+
+    if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+      new Notice('Width and height must be positive numbers')
+      return
+    }
+
+    if (this.resolved) return
+
+    this.resolved = true
+    this.resolveInput?.({ width, height })
+    this.close()
   }
 }
 

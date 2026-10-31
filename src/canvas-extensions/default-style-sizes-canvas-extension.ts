@@ -15,7 +15,10 @@ const DEFAULT_SIZE_SETTINGS: { setting: keyof AdvancedCanvasPluginSettingsValues
   { setting: 'defaultEdgeWidth', datasetKey: 'defaultEdgeWidth' },
   { setting: 'defaultArrowSize', datasetKey: 'defaultArrowSize' },
   // Solid is Obsidian's own border, so it needs its own "leave it alone" value
-  { setting: 'defaultNodeBorder', datasetKey: 'defaultNodeBorder', unchangedValue: 'default' }
+  { setting: 'defaultNodeBorder', datasetKey: 'defaultNodeBorder', unchangedValue: 'default' },
+  // Added by an LLM agent - not a per-element style default, but the same wrapper-attribute
+  // mechanism: scales the .canvas-node-placeholder title shown when zoomed out
+  { setting: 'nodePreviewTextSize', datasetKey: 'nodePreviewTextSize' }
 ]
 
 /** The value of a setting that leaves the size at Obsidian's own default */
@@ -61,7 +64,8 @@ function canvasColorFormatIsTriplet(): boolean {
 /**
  * Exposes the configured default sizes on the canvas wrapper so that elements without an
  * explicit style attribute (`groupLabelSize`/`groupOpacity`/`edgeWidth`/`arrowSize`/`border`) can
- * be styled by CSS.
+ * be styled by CSS. `nodePreviewTextSize` rides along on the same mechanism but is a global
+ * multiplier (the zoomed-out placeholder title) with no per-element counterpart.
  *
  * A setting that is left at its unchanged value (1x for sizes, 'default' otherwise) doesn't get
  * exposed at all - the styles are keyed on the presence of the data attribute, so Obsidian's own

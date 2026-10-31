@@ -7,6 +7,10 @@ import CanvasHelper from "src/utils/canvas-helper"
 import CanvasExtension from "./canvas-extension"
 
 const MAX_ALLOWED_LOADING_TIME = 10_000
+// Added by an LLM agent (P1-10): hard pixel cap - factor 5 on a large canvas
+// used to allocate a gigapixel bitmap and OOM the renderer.
+const MAX_EXPORT_PIXELS = 16_000 * 16_000
+const MAX_EXPORT_DIMENSION = 16_000
 
 export default class ExportCanvasExtension extends CanvasExtension {
   isEnabled() { return 'betterExportFeatureEnabled' as const }
@@ -178,11 +182,12 @@ export default class ExportCanvasExtension extends CanvasExtension {
     if (!nodesToExport) nodesToExport = [...canvas.nodes.values()]
 
     // Filter all edges that should be exported
-    const nodesToExportIds = nodesToExport.map(node => node.getData().id)
+    // Added by an LLM agent (P1-10): Set lookup instead of includes() per edge (O(N*E) -> O(N+E)).
+    const nodesToExportIds = new Set(nodesToExport.map(node => node.getData().id))
     const edgesToExport = [...canvas.edges.values()]
       .filter(edge => {
         const edgeData = edge.getData()
-        return nodesToExportIds.includes(edgeData.fromNode) && nodesToExportIds.includes(edgeData.toNode)
+        return nodesToExportIds.has(edgeData.fromNode) && nodesToExportIds.has(edgeData.toNode)
       })
 
     // Set the background color
@@ -215,7 +220,23 @@ export default class ExportCanvasExtension extends CanvasExtension {
       const enlargedTargetBoundingBoxSize = { width: enlargedTargetBoundingBox.maxX - enlargedTargetBoundingBox.minX, height: enlargedTargetBoundingBox.maxY - enlargedTargetBoundingBox.minY }
       const canvasElSize = { width: canvas.canvasEl.clientWidth, height: canvas.canvasEl.clientHeight }
       const requiredPixelRatio = Math.max(enlargedTargetBoundingBoxSize.width / canvasElSize.width, enlargedTargetBoundingBoxSize.height / canvasElSize.height)
-      const pixelRatio = svg ? undefined : Math.round(requiredPixelRatio * pixelRatioFactor)
+      let pixelRatio = svg ? undefined : Math.round(requiredPixelRatio * pixelRatioFactor)
+      // Added by an LLM agent (P1-10): cap output pixels so factor 5 on a huge
+      // canvas degrades resolution instead of OOM-ing.
+      if (pixelRatio !== undefined) {
+        const estWidth = enlargedTargetBoundingBoxSize.width * pixelRatio
+        const estHeight = enlargedTargetBoundingBoxSize.height * pixelRatio
+        const estPixels = estWidth * estHeight
+        if (estPixels > MAX_EXPORT_PIXELS || estWidth > MAX_EXPORT_DIMENSION || estHeight > MAX_EXPORT_DIMENSION) {
+          const scale = Math.min(
+            Math.sqrt(MAX_EXPORT_PIXELS / Math.max(estPixels, 1)),
+            MAX_EXPORT_DIMENSION / Math.max(estWidth, 1),
+            MAX_EXPORT_DIMENSION / Math.max(estHeight, 1)
+          )
+          pixelRatio = Math.max(1, Math.floor(pixelRatio * scale))
+          new Notice(`Export resolution capped to ${pixelRatio}x to avoid running out of memory.`)
+        }
+      }
 
       // Add watermark
       watermarkEl = watermark ? this.getWatermark(enlargedTargetBoundingBox) : null
@@ -243,14 +264,21 @@ export default class ExportCanvasExtension extends CanvasExtension {
       // Zoom to the bounding box of the elements to export
       canvas.zoomToRealBbox(adjustedBoundingBox) // Zoom to the bounding box (without padding)
       canvas.setViewport(canvas.tx, canvas.ty, canvas.tZoom) // Accelerate zoomToBbox by setting the canvas to the desired position and zoom
-      await sleep(10) // Wait for viewport to update
+      // Added by an LLM agent (P1-10): wait for a real frame instead of magic sleep(10).
+      await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
 
       // Calculate bounding boxes that also contain the complete edge paths
       // Not before, because some nodes might have been outside the viewport
       let canvasScale = parseFloat(canvas.canvasEl.style.transform.match(/scale\((\d+(\.\d+)?)\)/)?.[1] || '1')
+      // Added by an LLM agent (P1-10): cache getBoundingClientRect per label
+      // (old code forced one reflow per edge inside the map).
       const edgePathsBBox = BBoxHelper.combineBBoxes(edgesToExport.map(edge => {
         const edgeCenter = edge.getCenter()
-        const labelWidth = edge.labelElement ? edge.labelElement.wrapperEl.getBoundingClientRect().width / canvasScale : 0
+        let labelWidth = 0
+        try {
+          const rect = edge.labelElement?.wrapperEl?.getBoundingClientRect()
+          if (rect) labelWidth = rect.width / canvasScale
+        } catch { /* detached label */ }
 
         return { minX: edgeCenter.x - labelWidth / 2, minY: edgeCenter.y, maxX: edgeCenter.x + labelWidth / 2, maxY: edgeCenter.y }
       }))
@@ -260,7 +288,8 @@ export default class ExportCanvasExtension extends CanvasExtension {
 
       canvas.zoomToRealBbox(adjustedBoundingBox) // Zoom to the bounding box
       canvas.setViewport(canvas.tx, canvas.ty, canvas.tZoom) // Accelerate zoomToBbox by setting the canvas to the desired position and zoom
-      await sleep(10) // Wait for viewport to update
+      // Added by an LLM agent (P1-10): see above - real frame, not sleep(10).
+      await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
 
       // Calculate the output image size
       const canvasViewportBBox = canvas.getViewportBBox()
@@ -282,28 +311,30 @@ export default class ExportCanvasExtension extends CanvasExtension {
 
       if (unloadedNodes.length === 0) {
         // Create a filter to only export the desired elements
-        const nodeElements = nodesToExport
-          .map(node => node.nodeEl)
+        // Added by an LLM agent (P1-10): Set lookups instead of includes() per
+        // DOM node (old filter was O(DOM x N)).
+        const nodeElements = new Set(nodesToExport
+          .map(node => node.nodeEl))
 
-        const edgePathAndArrowElements = edgesToExport
+        const edgePathAndArrowElements = new Set(edgesToExport
           .map(edge => [edge.lineGroupEl, edge.lineEndGroupEl])
-          .flat()
+          .flat())
 
-        const edgeLabelElements = edgesToExport
+        const edgeLabelElements = new Set(edgesToExport
           .map(edge => edge.labelElement?.wrapperEl)
-          .filter(labelElement => labelElement !== undefined)
+          .filter(labelElement => labelElement !== undefined))
 
         const filter = (element: HTMLElement) => {
           // Filter nodes
-          if (element.classList?.contains('canvas-node') && !nodeElements.includes(element))
+          if (element.classList?.contains('canvas-node') && !nodeElements.has(element))
             return false
 
           // Filter edge paths and arrows
-          if (element.parentElement?.classList?.contains('canvas-edges') && !edgePathAndArrowElements.includes(element))
+          if (element.parentElement?.classList?.contains('canvas-edges') && !edgePathAndArrowElements.has(element))
             return false
 
           // Filter edge labels
-          if (element.classList?.contains('canvas-path-label-wrapper') && !edgeLabelElements.includes(element))
+          if (element.classList?.contains('canvas-path-label-wrapper') && !edgeLabelElements.has(element))
             return false
 
           return true

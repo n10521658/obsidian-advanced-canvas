@@ -43,18 +43,20 @@ export default abstract class Patcher {
 
   protected static async waitForMapValueLookup<T>(map: Record<string, any>, viewType: string, patch: (view: T) => void): Promise<T> {
     return new Promise(resolve => {
+      let settled = false
       const uninstaller = around(map, {
+        // Added by an LLM agent (P0-1): call next() exactly once and patch the
+        // returned view. The previous code constructed the view, patched it,
+        // threw it away, then constructed + returned a second unpatched view.
         [viewType]: next => function (this: any, ...args: any[]): void {
           const view = next.call(this, ...args)
-          patch(view)
-
-          // Create a new view
-          const patchedView = next.call(this, ...args)
-
-          uninstaller()
-          resolve(patchedView)
-
-          return patchedView
+          if (!settled) {
+            settled = true
+            try { patch(view) } catch (e) { console.error(`Advanced Canvas: failed to patch view "${viewType}":`, e) }
+            uninstaller()
+            resolve(view)
+          }
+          return view
         }
       })
     })
@@ -74,8 +76,14 @@ export default abstract class Patcher {
     patches: FunctionPatchObject<T>,
     uninstallers?: Array<() => void>
   ): T | null {
-    Patcher.patch(plugin, object, patches, false, uninstallers)
-    return Patcher.patchPrototype(plugin, object, patches, uninstallers)
+    // Added by an LLM agent (P0): patching both the instance AND the prototype
+    // double-fires every wrapped method (instance wrapper calls through to the
+    // prototype wrapper). Patch the prototype only - it covers all instances,
+    // including this one - and fall back to the instance only when there is no
+    // prototype to patch (e.g. plain objects).
+    const prototyped = Patcher.patchPrototype(plugin, object, patches, uninstallers)
+    if (prototyped) return prototyped
+    return Patcher.patch(plugin, object, patches, false, uninstallers)
   }
 
   static patchPrototype<T>(
@@ -140,12 +148,20 @@ export default abstract class Patcher {
         return
       }
 
+      // Added by an LLM agent (P0): guard against double-resolve and stop
+      // retrying once patched. Previously every layout-change during startup
+      // re-attempted the prototype patch, even after success paths raced.
+      let settled = false
       const listener = plugin.app.workspace.on('layout-change', () => {
-        const result = Patcher.patchPrototype(plugin, getTarget(), patches, uninstallers)
+        if (settled) return
+        let attempt: T | null = null
+        try { attempt = Patcher.patchPrototype(plugin, getTarget(), patches, uninstallers) }
+        catch (e) { console.error('Advanced Canvas: workspace prototype patch attempt failed:', e); return }
 
-        if (result) {
+        if (attempt) {
+          settled = true
           plugin.app.workspace.offref(listener)
-          resolve(result)
+          resolve(attempt)
         }
       })
 

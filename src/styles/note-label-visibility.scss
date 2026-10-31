@@ -1,0 +1,7 @@
+/* Added by an LLM agent */
+/* Hides all file/text/link node labels while the `hideNoteLabels` setting is on (toggled by the
+   "Toggle note label visibility" command). The label stays visible while it is being
+   edited, so renaming a node still works with the labels hidden. */
+.canvas-wrapper[data-hide-note-labels="true"] .canvas-node .canvas-node-label:not(:focus) {
+  display: none;
+}

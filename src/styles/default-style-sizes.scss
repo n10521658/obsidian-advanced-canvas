@@ -1,6 +1,8 @@
 /* Added by an LLM agent */
 /* Applies the configured default group label size, group opacity, edge width, arrow size and
    node border to every element that doesn't have a value of its own set in the node/edge popup.
+   The node preview text size also lives here - it's a global multiplier with no per-element
+   counterpart, but uses the same wrapper-attribute mechanism.
 
    The data attributes are only set on the canvas wrapper while the corresponding setting isn't
    at its unchanged value (see default-style-sizes-canvas-extension.ts), so Obsidian's own styling
@@ -104,6 +106,22 @@
       background-color: transparent;
       box-shadow: none;
     }
+  }
+}
+//#endregion
+
+//#region Node preview text size
+// Added by an LLM agent - scales .canvas-node-placeholder, the title Obsidian shows in place of
+// a node's content once the canvas is zoomed out past the content breakpoint (zoom <= -1.7, the
+// wrapper gets .mod-zoomed-out). Obsidian's own font-size is a fixed 32px (app.css).
+.canvas-wrapper[data-node-preview-text-size] {
+  &[data-node-preview-text-size='1.5'] { --node-preview-text-size-multiplier: 1.5; }
+  &[data-node-preview-text-size='2'] { --node-preview-text-size-multiplier: 2; }
+  &[data-node-preview-text-size='3'] { --node-preview-text-size-multiplier: 3; }
+  &[data-node-preview-text-size='4'] { --node-preview-text-size-multiplier: 4; }
+
+  .canvas-node-placeholder {
+    font-size: calc(32px * var(--node-preview-text-size-multiplier, 1));
   }
 }
 //#endregion

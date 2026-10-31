@@ -50,16 +50,16 @@ export default class BasesTableViewPatcher extends Patcher {
 
     await Patcher.patchOnce<BasesTableRow, BasesTableCell>(this.plugin, row, resolve => ({
       render: Patcher.OverrideExisting(next => function (...args: unknown[]): void {
-        let result = next.call(this, ...args)
+        // Added by an LLM agent (P0): single next() call per render. The old
+        // code called next() twice per table render (once to discover the cell,
+        // once to "re-render" it), doubling table render cost.
+        const result = next.call(this, ...args)
 
         if (this.cells.length > 0) {
           const cell = this.cells.first()!
 
           void that.patchTableCell(cell)
           resolve(cell)
-
-          // Re-render the first cell
-          result = next.call(this, ...args)
         }
 
         return result
@@ -73,10 +73,13 @@ export default class BasesTableViewPatcher extends Patcher {
         const isCanvas = ctx.file?.extension === "canvas"
         if (isCanvas) ctx.file.extension = "md"
 
-        const result = next.call(this, ctx)
-
-        if (isCanvas) ctx.file.extension = "canvas"
-        return result
+        try {
+          return next.call(this, ctx)
+        } finally {
+          // Added by an LLM agent (P0-3): try/finally so the shared TFile is
+          // never left lied-about if next() throws.
+          if (isCanvas && ctx.file) ctx.file.extension = "canvas"
+        }
       })
     })
   }
